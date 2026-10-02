@@ -1,0 +1,6 @@
+#pragma once
+
+namespace sandbox_resources {
+    inline constexpr const char *configured_file_helper =
+        R"sandbox(@SANDBOX_FILE_HELPER_PATH@)sandbox";
+}
