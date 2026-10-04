@@ -1,6 +1,14 @@
 #pragma once
 
 namespace sandbox_resources {
+    inline constexpr const char *configured_krun_runner = R"sandbox(@SANDBOX_KRUN_RUNNER_PATH@)sandbox";
+    inline constexpr const char *configured_krun_firmware = R"sandbox(@LIBKRUNFW_LIBRARY@)sandbox";
     inline constexpr const char *configured_file_helper =
         R"sandbox(@SANDBOX_FILE_HELPER_PATH@)sandbox";
+    inline constexpr const char *configured_runtime_runner =
+        R"sandbox(@SANDBOX_RUNTIME_RUNNER_PATH@)sandbox";
+    inline constexpr const char *configured_git_worker =
+        R"sandbox(@SANDBOX_GIT_WORKER_PATH@)sandbox";
+    inline constexpr const char *configured_guest_agent =
+        R"sandbox(@SANDBOX_GUEST_AGENT_PATH@)sandbox";
 }

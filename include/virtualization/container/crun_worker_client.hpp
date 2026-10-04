@@ -1,20 +1,14 @@
 #pragma once
 
-#include "process.hpp"
+#include "../process.hpp"
 #include <filesystem>
 
-class CrunClient {
+class CrunWorkerClient {
   public:
-    explicit CrunClient(std::filesystem::path root = {},
-                        std::string binary = "/usr/local/bin/crun",
-                        bool systemd_cgroups = false)
-        : root_(std::move(root)), binary_(std::move(binary)), systemd_cgroups_(systemd_cgroups) {
+    // Internal transport to the SDK-owned libcrun worker. Not a public SDK API.
+    explicit CrunWorkerClient(std::filesystem::path root, bool systemd_cgroups)
+        : root_(std::move(root)), systemd_cgroups_(systemd_cgroups) {
     }
-    Result call(const std::vector<std::string> &options,
-                int timeout_ms = 10000,
-                bool drain_until_eof = true,
-                size_t output_limit = 1024 * 1024,
-                std::string_view stdin_data = {});
 
     Result start(const std::string &id, const std::string &bundle);
 
@@ -31,7 +25,11 @@ class CrunClient {
     bool destroy(const std::string &id);
 
   private:
+    Result call(const std::vector<std::string> &options,
+                int timeout_ms = 10000,
+                bool drain_until_eof = true,
+                size_t output_limit = 1024 * 1024,
+                std::string_view stdin_data = {});
     std::filesystem::path root_;
-    std::string binary_;
     bool systemd_cgroups_;
 };

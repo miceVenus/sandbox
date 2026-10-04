@@ -1,4 +1,4 @@
-#include "../include/resources.hpp"
+#include "resources.hpp"
 #include "resources_config.hpp"
 
 namespace sandbox_resources {

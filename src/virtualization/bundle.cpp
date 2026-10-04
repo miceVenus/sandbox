@@ -1,10 +1,10 @@
-#include "../../bundle.hpp"
-#include "../../host_tools.hpp"
-#include "../../include/lib.hpp"
-#include "../../include/virtualization/oci.hpp"
-#include "../../include/virtualization/runtime_files.hpp"
-#include "../../resources.hpp"
-#include "../../sandbox.hpp"
+#include "virtualization/bundle.hpp"
+#include "lib.hpp"
+#include "resources.hpp"
+#include "sandbox.hpp"
+#include "virtualization/host_tools.hpp"
+#include "virtualization/oci.hpp"
+#include "virtualization/runtime_files.hpp"
 
 #include <filesystem>
 #include <sstream>

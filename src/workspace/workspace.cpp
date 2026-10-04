@@ -1,4 +1,4 @@
-#include "../../workspace.hpp"
+#include "../../include/workspace/workspace.hpp"
 #include "../../include/workspace/git/git_repository_ops.hpp"
 #include <algorithm>
 #include <fstream>

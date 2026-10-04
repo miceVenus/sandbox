@@ -1,7 +1,7 @@
-#include "../../include/virtualization/container/oci.hpp"
-#include "../../host_tools.hpp"
-#include "../../include/lib.hpp"
-#include "../../sandbox.hpp"
+#include "virtualization/oci.hpp"
+#include "lib.hpp"
+#include "sandbox.hpp"
+#include "virtualization/host_tools.hpp"
 
 #include <fstream>
 #include <nlohmann/json.hpp>

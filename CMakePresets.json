@@ -1,0 +1,60 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "SANDBOX_ENABLE_LIBKRUN": "ON",
+        "SANDBOX_BUILD_BENCHMARKS": "OFF",
+        "SANDBOX_DEVELOPMENT_BUILD": "ON",
+        "BUILD_TESTING": "OFF",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release SDK",
+      "description": "Optimized, installable SDK; no tests or benchmarks",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SANDBOX_DEVELOPMENT_BUILD": "OFF",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug SDK",
+      "description": "SDK with debug symbols and build-tree runtime resources",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "test",
+      "displayName": "Test SDK",
+      "description": "Optimized SDK with debug symbols and the complete test suite",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "release", "targets": ["sandbox-sdk"], "jobs": 4 },
+    { "name": "debug", "configurePreset": "debug", "targets": ["sandbox-sdk"], "jobs": 4 },
+    { "name": "test", "configurePreset": "test", "targets": ["sandbox-tests"], "jobs": 4 }
+  ],
+  "testPresets": [
+    {
+      "name": "test",
+      "configurePreset": "test",
+      "output": { "outputOnFailure": true },
+      "execution": { "jobs": 1, "noTestsAction": "error" }
+    }
+  ]
+}

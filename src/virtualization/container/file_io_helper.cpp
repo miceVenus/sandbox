@@ -1,5 +1,5 @@
 // Internal OCI helper. All file access happens inside the container.
-#include "../../../workspace_files.hpp"
+#include "workspace/workspace_files.hpp"
 #include <array>
 #include <cerrno>
 #include <iostream>

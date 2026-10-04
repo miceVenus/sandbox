@@ -1,8 +1,8 @@
 #pragma once
-#include "../sandbox_types.hpp"
-#include "../workspace.hpp"
-#include "../workspace_backend.hpp"
+#include "sandbox_types.hpp"
 #include "virtualization/runtime.hpp"
+#include "workspace/workspace.hpp"
+#include "workspace/workspace_backend.hpp"
 #include <memory>
 #include <optional>
 
