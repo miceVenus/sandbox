@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,13 @@ class GitWorkspace {
         return baseline_;
     }
 
+    const std::string &source_head() const {
+        return source_head_;
+    }
+    const std::optional<std::string> &source_branch() const {
+        return source_branch_;
+    }
+
     std::string status() const;
 
     // Includes tracked changes and new non-ignored files; stages a private index.
@@ -41,10 +49,8 @@ class GitWorkspace {
     // Define host concurrency rules before adding apply and discard APIs.
   private:
     GitWorkspace(std::filesystem::path session, std::filesystem::path source, std::string baseline);
-    std::string git(const std::vector<std::string> &arguments) const;
     void validate_files() const;
     std::filesystem::path session_, source_;
-    std::string baseline_;
+    std::string baseline_, source_head_;
+    std::optional<std::string> source_branch_;
 };
-
-int workspace_cli(int argc, char **argv);

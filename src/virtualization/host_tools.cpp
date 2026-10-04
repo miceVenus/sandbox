@@ -1,5 +1,5 @@
-#include "host_tools.hpp"
-#include "lib.hpp"
+#include "../../host_tools.hpp"
+#include "../../include/lib.hpp"
 
 #include <fstream>
 

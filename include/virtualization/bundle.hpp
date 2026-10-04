@@ -1,6 +1,6 @@
 #pragma once
 
-struct Session;
+struct SandboxInfo;
 
 // Initialize rootfs and workspace ownership, then write the OCI configuration.
-void prepare_bundle(const Session &session);
+void prepare_bundle(const SandboxInfo &info);

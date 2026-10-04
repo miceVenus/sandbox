@@ -1,4 +1,4 @@
-#include "process.hpp"
+#include "../../process.hpp"
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -90,7 +90,8 @@ Result run_process(const std::vector<std::string> &args,
                    int timeout_ms,
                    size_t output_limit,
                    bool drain_until_eof,
-                   std::string_view stdin_data) {
+                   std::string_view stdin_data,
+                   const ProcessSupervision &supervision) {
     if (args.empty()) {
         throw std::runtime_error("empty argv");
     }
@@ -124,6 +125,10 @@ Result run_process(const std::vector<std::string> &args,
         }
     };
 
+    if (!supervision.cwd.empty()) {
+        check(posix_spawn_file_actions_addchdir_np(&actions, supervision.cwd.c_str()));
+    }
+
     if (input.child_fd >= 0) {
         check(posix_spawn_file_actions_adddup2(&actions, input.child_fd, 0));
     } else {
@@ -144,6 +149,18 @@ Result run_process(const std::vector<std::string> &args,
     if (rc) {
         throw std::runtime_error("spawn: " + std::string(std::strerror(rc)));
     }
+    // Callbacks and I/O can throw. Retain PID ownership and always reap on that path.
+    struct ChildCleanup {
+        pid_t pid;
+        bool reaped = false;
+        ~ChildCleanup() {
+            if (!reaped) {
+                kill(-pid, SIGKILL);
+                while (waitpid(pid, nullptr, 0) < 0 && errno == EINTR) {
+                }
+            }
+        }
+    } cleanup{pid};
     out.close_write();
     err.close_write();
     input.close_child();
@@ -182,6 +199,10 @@ Result run_process(const std::vector<std::string> &args,
             if (n > 0) {
                 const size_t room = output_limit - result.out.size() - result.err.size();
                 target.append(buf.data(), std::min(room, static_cast<size_t>(n)));
+                if (supervision.on_output && room > 0) {
+                    supervision.on_output(&pipe == &err,
+                                          {buf.data(), std::min(room, static_cast<size_t>(n))});
+                }
                 if (static_cast<size_t>(n) > room) {
                     result.output_limited = true;
                 }
@@ -208,10 +229,11 @@ Result run_process(const std::vector<std::string> &args,
         siginfo_t info{};
         const int observed = waitid(P_PID, pid, &info, WEXITED | WNOHANG | WNOWAIT);
         if (observed < 0 && errno != EINTR) {
-            kill(-pid, SIGKILL);
-            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
-            }
             throw std::runtime_error("waitid failed");
+        }
+        if (supervision.cancel && supervision.cancel->load()) {
+            result.cancelled = true;
+            break;
         }
         if (result.output_limited) {
             break;
@@ -232,7 +254,8 @@ Result run_process(const std::vector<std::string> &args,
     }
     // This kills only the runtime client group. The caller must also destroy
     // the container on cancellation: its processes need not share this group.
-    if (result.timed_out || result.output_limited) {
+    if (result.timed_out || result.output_limited || result.cancelled ||
+        supervision.kill_remaining_group) {
         kill(-pid, SIGKILL);
     }
     while (waitpid(pid, &status, 0) < 0) {
@@ -240,6 +263,7 @@ Result run_process(const std::vector<std::string> &args,
             throw std::runtime_error("waitpid failed");
         }
     }
+    cleanup.reaped = true;
     if (WIFEXITED(status)) {
         result.runtime_status = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {

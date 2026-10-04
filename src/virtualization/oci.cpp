@@ -1,7 +1,7 @@
-#include "oci.hpp"
-#include "host_tools.hpp"
-#include "lib.hpp"
-#include "sandbox.hpp"
+#include "../../include/virtualization/container/oci.hpp"
+#include "../../host_tools.hpp"
+#include "../../include/lib.hpp"
+#include "../../sandbox.hpp"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -9,7 +9,7 @@
 
 using json = nlohmann::json;
 
-void prepare_oci_config(const Session &s) {
+void prepare_oci_config(const SandboxInfo &s) {
 
     const auto &o = s.options;
 
@@ -33,7 +33,7 @@ void prepare_oci_config(const Session &s) {
         for (const auto &directory : {"build", "env", "cache"}) {
             mount(std::string("/") + directory,
                   "bind",
-                  (s.s_dir / "runtime-data" / directory).string(),
+                  (s.directory / "runtime-data" / directory).string(),
                   {"bind", "rw", "nosuid", "nodev", "private"});
         }
     }
@@ -95,7 +95,7 @@ void prepare_oci_config(const Session &s) {
                         {{"type", "RLIMIT_CORE"}, {"soft", 0}, {"hard", 0}}})}}},
         {"linux",
          {{"namespaces", namespaces},
-          {"cgroupsPath", "/bbm-sandbox-" + s.s_id},
+          {"cgroupsPath", "/bbm-sandbox-" + s.id},
           {"resources",
            {{"devices", devices},
             {"memory", {{"limit", o.memory_bytes}, {"swap", o.memory_bytes}}},
@@ -134,7 +134,7 @@ void prepare_oci_config(const Session &s) {
             json::array({{{"containerID", 0}, {"hostID", geteuid()}, {"size", 1}}});
         config["linux"]["gidMappings"] =
             json::array({{{"containerID", 0}, {"hostID", getegid()}, {"size", 1}}});
-        config["linux"]["cgroupsPath"] = "user.slice:bbm-sandbox:" + s.s_id;
+        config["linux"]["cgroupsPath"] = "user.slice:bbm-sandbox:" + s.id;
         // An unprivileged runtime cannot install a device eBPF filter. Only
         // standard /dev entries are provided; writable workspace is nodev and
         // the task has no CAP_MKNOD. There is no host /dev bind mount.

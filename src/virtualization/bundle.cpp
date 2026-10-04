@@ -1,9 +1,10 @@
-#include "bundle.hpp"
-#include "host_tools.hpp"
-#include "lib.hpp"
-#include "oci.hpp"
-#include "resources.hpp"
-#include "sandbox.hpp"
+#include "../../bundle.hpp"
+#include "../../host_tools.hpp"
+#include "../../include/lib.hpp"
+#include "../../include/virtualization/oci.hpp"
+#include "../../include/virtualization/runtime_files.hpp"
+#include "../../resources.hpp"
+#include "../../sandbox.hpp"
 
 #include <filesystem>
 #include <sstream>
@@ -11,39 +12,7 @@
 
 namespace fs = std::filesystem;
 
-namespace {
-    void install_program(const fs::path &rootfs,
-                         const fs::path &executable,
-                         const fs::path &container_path) {
-
-        require(executable.is_absolute() && fs::is_regular_file(executable),
-                "host executable is unavailable: " + executable.string());
-
-        auto copy_host_file = [&](const fs::path &source) {
-            require(source.is_absolute() && fs::is_regular_file(source),
-                    "invalid runtime dependency: " + source.string());
-            const fs::path target = rootfs / source.relative_path();
-            fs::create_directories(target.parent_path());
-            fs::copy_file(source, target, fs::copy_options::skip_existing);
-        };
-
-        const auto target = rootfs / container_path.relative_path();
-        fs::create_directories(target.parent_path());
-        fs::copy_file(executable, target);
-        const Result dependencies = run_process({"/usr/bin/ldd", executable.string()}, 10000);
-        checked(dependencies);
-        std::istringstream words(dependencies.out);
-        std::string word;
-        while (words >> word) {
-            if (!word.empty() && word.front() == '/') {
-                copy_host_file(word);
-            }
-        }
-    }
-
-} // namespace
-
-void prepare_bundle(const Session &s) {
+void prepare_bundle(const SandboxInfo &s) {
     const auto &o = s.options;
     const auto helper = sandbox_resources::file_helper_path();
     require(fs::is_regular_file(helper) && access(helper.c_str(), X_OK) == 0,
@@ -61,11 +30,11 @@ void prepare_bundle(const Session &s) {
                       root / fs::path(sandbox_resources::container_file_helper).relative_path());
         for (const auto &directory : {"build", "env", "cache"}) {
             fs::create_directories(root / directory);
-            fs::create_directories(s.s_dir / "runtime-data" / directory);
+            fs::create_directories(s.directory / "runtime-data" / directory);
         }
-        fs::create_directories(s.s_dir / "runtime-data/build/tmp");
-        fs::create_directories(s.s_dir / "runtime-data/env/home");
-        fs::create_directories(s.s_dir / "runtime-data/cache/pip");
+        fs::create_directories(s.directory / "runtime-data/build/tmp");
+        fs::create_directories(s.directory / "runtime-data/env/home");
+        fs::create_directories(s.directory / "runtime-data/cache/pip");
     } else {
         fs::create_directories(root / "bin");
         const auto file = run_process({"/usr/bin/file", "/usr/bin/busybox"}, 10000);
@@ -86,8 +55,8 @@ void prepare_bundle(const Session &s) {
                 }
             }
         }
-        install_program(root, "/usr/bin/git", "/usr/bin/git");
-        install_program(root, helper, sandbox_resources::container_file_helper);
+        install_runtime_program(root, "/usr/bin/git", "/usr/bin/git");
+        install_runtime_program(root, helper, sandbox_resources::container_file_helper);
     }
 
     const bool rootless = geteuid() != 0;
@@ -98,7 +67,7 @@ void prepare_bundle(const Session &s) {
                     "cannot set task file ownership");
         }
         if (o.environment == Environment::HostTools) {
-            for (auto &entry : fs::recursive_directory_iterator(s.s_dir / "runtime-data")) {
+            for (auto &entry : fs::recursive_directory_iterator(s.directory / "runtime-data")) {
                 require(lchown(entry.path().c_str(), 65534, 65534) == 0,
                         "cannot set runtime data ownership");
             }
