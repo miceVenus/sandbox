@@ -5,11 +5,6 @@ else()
   set(SANDBOX_RESOURCE_DIR "${CMAKE_INSTALL_FULL_LIBEXECDIR}/bbm-sandbox")
 endif()
 
-set(SANDBOX_FILE_HELPER_PATH "${SANDBOX_RESOURCE_DIR}/sandbox-io")
-set(SANDBOX_RUNTIME_RUNNER_PATH "${SANDBOX_RESOURCE_DIR}/sandbox-crun")
-set(SANDBOX_GIT_WORKER_PATH "${SANDBOX_RESOURCE_DIR}/sandbox-git")
-set(SANDBOX_GUEST_AGENT_PATH "${SANDBOX_RESOURCE_DIR}/agentd")
-set(SANDBOX_KRUN_RUNNER_PATH "${SANDBOX_RESOURCE_DIR}/sandbox-krun")
 configure_file(resources_config.hpp.in generated/resources_config.hpp @ONLY)
 
 function(sandbox_add_helper target standard)
@@ -26,31 +21,44 @@ function(sandbox_add_helper target standard)
 endfunction()
 
 
-sandbox_add_helper(sandbox-io cxx_std_17
-        src/virtualization/container/file_io_helper.cpp
-        src/workspace/workspace_files.cpp)
+sandbox_add_helper(sandbox-crun cxx_std_17
+        src/virtualization/container/crun_worker.cpp
+        src/virtualization/container/libcrun_operations.c)
 
-sandbox_add_helper(sandbox-crun c_std_11
-        src/virtualization/container/crun_runner.c)
-
-target_link_libraries(sandbox-crun PRIVATE Libcrun::Libcrun)
-
-sandbox_add_helper(sandbox-git cxx_std_17
-        src/workspace/git/git_runner.cpp
-        src/workspace/git/git_repository_ops.cpp
-        src/lib.cpp)
-
-target_link_libraries(sandbox-git PRIVATE
-  nlohmann_json::nlohmann_json libgit2::libgit2package)
+target_compile_features(sandbox-crun PRIVATE c_std_11)
+target_link_libraries(sandbox-crun PRIVATE Libcrun::Libcrun nlohmann_json::nlohmann_json)
 
 sandbox_add_helper(agentd cxx_std_17
-  src/guest/guest_main.cpp src/guest/task_runner.cpp)
+  src/agent/main.cpp src/agent/task_runner.cpp)
 # sandbox_core is declared in SandboxLibrary.cmake; link there to avoid a cycle.
 
 if(SANDBOX_ENABLE_LIBKRUN)
   sandbox_add_helper(sandbox-krun cxx_std_17 src/virtualization/microvm/krun_runner.cpp)
   target_link_libraries(sandbox-krun PRIVATE Libkrun::Libkrun nlohmann_json::nlohmann_json)
-  get_filename_component(SANDBOX_KRUN_LIBRARY_DIR "${LIBKRUN_LIBRARY}" DIRECTORY)
+  # Stage private copies; never patch libraries in an external installation.
+  find_program(SANDBOX_PATCHELF patchelf REQUIRED)
+  file(MAKE_DIRECTORY "${SANDBOX_BUILD_HELPER_DIR}/lib")
+  foreach(pair "${LIBKRUN_LIBRARY}|libkrun.so.1" "${LIBKRUNFW_LIBRARY}|libkrunfw.so.5")
+    string(REPLACE "|" ";" parts "${pair}")
+    list(GET parts 0 source)
+    list(GET parts 1 name)
+    execute_process(COMMAND "${SANDBOX_PATCHELF}" --print-soname "${source}"
+      OUTPUT_VARIABLE soname OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE inspected)
+    if(NOT inspected EQUAL 0 OR NOT soname STREQUAL name)
+      message(FATAL_ERROR "${source} has an unsupported ABI; expected SONAME ${name}, found ${soname}")
+    endif()
+    set(destination "${SANDBOX_BUILD_HELPER_DIR}/lib/${name}")
+    file(COPY_FILE "${source}" "${destination}" ONLY_IF_DIFFERENT)
+    execute_process(COMMAND "${SANDBOX_PATCHELF}" --set-rpath "$ORIGIN" "${destination}"
+      RESULT_VARIABLE patched)
+    if(NOT patched EQUAL 0)
+      message(FATAL_ERROR "Cannot prepare private runtime library ${destination}")
+    endif()
+  endforeach()
+  # The executable and both dependent DSOs use paths relative to their own location.
   set_target_properties(sandbox-krun PROPERTIES
-    INSTALL_RPATH "${SANDBOX_KRUN_LIBRARY_DIR}")
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN/lib")
+  install(DIRECTORY "${SANDBOX_BUILD_HELPER_DIR}/lib/"
+    DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/bbm-sandbox/lib")
 endif()

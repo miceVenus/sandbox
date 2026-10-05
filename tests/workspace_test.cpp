@@ -123,8 +123,10 @@ int main() {
         check(workspace.diff().find("+committed in B") != std::string::npos,
               "preview did not recover");
         rejects([&] { GitWorkspace::create(repo, temp.path / "bad revision", "not-a-revision"); });
-        write(info / "info.txt", "broken\n");
-        rejects([&] { GitWorkspace::open(info).status(); });
+        write(info / "session.txt", "broken\n");
+        check(rejects([&] { GitWorkspace::open(info).status(); }).find("invalid session metadata") !=
+                  std::string::npos,
+              "corrupt workspace metadata was not rejected");
         std::cout << "SDK Git workspace tests passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

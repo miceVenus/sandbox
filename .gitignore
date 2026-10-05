@@ -1,0 +1,25 @@
+plan.md
+.*
+/build/
+/CMakeUserPresets.json
+
+doc/
+cmake/
+# Required build/package modules are source inputs.
+!cmake/
+!cmake/*.cmake
+!cmake/*.cmake.in
+benchmarks/results/
+TODO.md
+
+# Runtime dependency pins are source; downloaded/generated artifacts are not.
+!deps.lock.json
+!tools/
+!tools/build-deps.sh
+!tools/build_deps.py
+
+!/.gitignore
+!doc/
+doc/*
+!doc/dependencies.md
+!doc/communication.md

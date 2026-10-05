@@ -18,12 +18,18 @@ struct RuntimeStatus {
     std::string error;
 };
 
+enum class OutputStream { Stdout, Stderr };
+// Called synchronously on execute's caller thread with binary chunks. The view is
+// valid only during the callback; calling another blocking Sandbox API is rejected.
+using OutputCallback = std::function<void(OutputStream, std::string_view)>;
+
 struct RuntimeCommand {
     std::vector<std::string> argv;
     std::filesystem::path cwd;
     std::string stdin_data;
     int timeout_ms = 2000;
     size_t output_limit = 8 * 1024 * 1024;
+    OutputCallback on_output{};
 };
 
 // Host/guest transport, artifact format and isolation belong to the backend.
@@ -39,6 +45,8 @@ class RuntimeBackend {
     virtual void start(SandboxInfo &info) = 0;
     virtual RuntimeStatus status(const SandboxInfo &info) = 0;
     virtual Result execute(const SandboxInfo &info, const RuntimeCommand &command) = 0;
+    // May be invoked concurrently with execute; false means no active task.
+    virtual bool cancel() { return false; }
     virtual Result
     read(const SandboxInfo &info, const std::filesystem::path &path, size_t limit) = 0;
     virtual Result

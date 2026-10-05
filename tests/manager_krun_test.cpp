@@ -14,6 +14,7 @@ int main(int argc, char **argv) {
         ~Cleanup() { if (!path.empty()) { std::error_code ec; fs::remove_all(path, ec); } }
     } cleanup;
     std::string id;
+    std::string phase = "create VM";
     std::unique_ptr<Sandbox> manager;
     try {
         char pattern[] = "/tmp/krun-sdk-XXXXXX";
@@ -37,14 +38,33 @@ int main(int argc, char **argv) {
         options.cmd_timeout = std::chrono::seconds(10);
         const auto info = manager->create(options);
         id = info.id;
+        phase = "streaming and cancellation";
         check(info.runtime_backend == "vm-libkrun" && info.rootless &&
               info.resource_limits_verified, "VM policy not verified");
+        std::string streamed_out, streamed_err;
+        const auto streamed = manager->execute(
+            std::vector<std::string>{"/bin/sh", "-c", "printf first; sleep 0.1; printf second; printf error >&2"},
+            [&](OutputStream stream, std::string_view bytes) {
+                (stream == OutputStream::Stdout ? streamed_out : streamed_err).append(bytes);
+            });
+        check(streamed.runtime_status == 0 && streamed_out == "firstsecond" && streamed_err == "error" &&
+              streamed.out == streamed_out && streamed.err == streamed_err, "SDK streaming lost output");
+        bool cancellation_sent = false;
+        const auto cancelled = manager->execute(
+            std::vector<std::string>{"/bin/sh", "-c", "printf ready; sleep 9"},
+            [&](OutputStream stream, std::string_view bytes) {
+                if (stream == OutputStream::Stdout && !bytes.empty() && !cancellation_sent)
+                    cancellation_sent = manager->cancel();
+            });
+        check(cancellation_sent && cancelled.cancelled && !cancelled.timed_out,
+              "streaming cancellation did not reclaim the task");
         auto exec = [&](std::vector<std::string> args) {
             const auto result = manager->execute(args);
             check(result.runtime_status == 0 && !result.timed_out && !result.output_limited,
                   "Guest command failed: " + result.err);
             return result.out;
         };
+        phase = "Guest task policy";
         const auto status = exec({"/bin/cat", "/proc/self/status"});
         check(status.find("Uid:\t65534\t65534") != std::string::npos &&
               status.find("CapEff:\t0000000000000000") != std::string::npos &&
@@ -71,11 +91,16 @@ int main(int argc, char **argv) {
               "argument-test", "--serve", "--run-task", "a b"});
         check(!fs::exists(info.directory / "guest/rootfs/sandbox-tools/sandbox-task"),
               "VM still deploys a separate task executable");
+        phase = "file API";
         manager->write("/project/a", "changed\n");
         check(manager->read("/project/a") == "changed\n", "VM file API failed");
         const std::string binary("a\0b\xff", 4);
         manager->write("/project/binary", binary);
         check(manager->read("/project/binary") == binary, "VM binary file roundtrip failed");
+        phase = "disconnected upload";
+        // agentd serves one owned connection at a time. Release the persistent SDK
+        // channel before the low-level fixture, without stopping the running VM.
+        manager.reset();
         {
             // Disconnect in the middle of an upload. The privileged service must
             // remove its temporary file using the mapped file identity too.
@@ -93,6 +118,9 @@ int main(int argc, char **argv) {
             channel.send({1, agent::Flag::Event, "fs.write.data",
                           {{"offset", 0}, {"data", agent::binary_bytes("partial")}}}, until);
         }
+        manager = std::make_unique<Sandbox>(root / "state", make_libkrun_backend());
+        manager->open(id);
+        phase = "upload cleanup and file boundaries";
         check(exec({"/bin/sh", "-c", "find /project -name '.sandbox-io-*'"}).empty(),
               "disconnected VM upload left a temporary file");
         exec({"/bin/test", "!", "-e", "/project/abandoned"});
@@ -113,23 +141,27 @@ int main(int argc, char **argv) {
             exec({"/usr/bin/g++", "/project/main.cpp", "-o", "/build/app"});
             check(exec({"/build/app"}) == "42", "Guest compiler environment failed");
         }
+        phase = "workspace inspection";
         const auto changes = manager->get_changes();
         check(changes.diff.find("+changed") != std::string::npos, "Guest sync/diff failed");
         check(manager->get_status() == SandboxState::Active, "VM did not resume");
         check(test::read(source / "a") == "original\n", "A changed");
         // Re-open without retaining an in-memory VMM PID or client connection.
-        Sandbox reopened(root / "state", make_libkrun_backend());
-        reopened.open(info.id);
-        check(reopened.read("/project/a") == "changed\n", "VM re-open failed");
-        reopened.stop();
-        reopened.stop();
-        check(reopened.get_status() == SandboxState::Stopped, "VM stop failed");
-        check(reopened.get_changes().diff.find("+changed") != std::string::npos,
+        phase = "reopen VM";
+        manager.reset();
+        manager = std::make_unique<Sandbox>(root / "state", make_libkrun_backend());
+        manager->open(info.id);
+        check(manager->read("/project/a") == "changed\n", "VM re-open failed");
+        manager->stop();
+        manager->stop();
+        check(manager->get_status() == SandboxState::Stopped, "VM stop failed");
+        check(manager->get_changes().diff.find("+changed") != std::string::npos,
               "stopped VM lost B");
-        reopened.destroy();
+        manager->destroy();
         check(!fs::exists(info.directory), "destroy retained B or info artifacts");
         id.clear();
         if (options.environment == Environment::Minimal) {
+            phase = "VM timeout policy";
             options.cmd_timeout = std::chrono::milliseconds(200);
             manager = std::make_unique<Sandbox>(root / "state", make_libkrun_backend());
             const auto timed = manager->create(options);
@@ -142,6 +174,7 @@ int main(int argc, char **argv) {
             id.clear();
 
             options.cmd_timeout = std::chrono::seconds(10);
+            phase = "VM output policy";
             options.max_output_bytes = 64;
             manager = std::make_unique<Sandbox>(root / "state", make_libkrun_backend());
             const auto bounded = manager->create(options);
@@ -155,10 +188,18 @@ int main(int argc, char **argv) {
         }
         std::cout << "real libkrun VM SDK test passed\n";
     } catch (const std::exception &error) {
-        std::cerr << error.what() << '\n';
+        std::cerr << phase << ": " << error.what() << '\n';
         if (manager && !id.empty()) {
             try { manager->stop(); } catch (const std::exception &cleanup) {
                 std::cerr << "cleanup: " << cleanup.what() << '\n';
+            }
+        } else if (!id.empty()) {
+            try {
+                Sandbox recovery(cleanup.path / "state", make_libkrun_backend());
+                recovery.open(id);
+                recovery.stop();
+            } catch (const std::exception &cleanup_error) {
+                std::cerr << "cleanup: " << cleanup_error.what() << '\n';
             }
         }
         return 1;

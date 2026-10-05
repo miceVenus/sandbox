@@ -1,4 +1,5 @@
 #include "../include/sandbox.hpp"
+#include "../include/virtualization/runtime_files.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -95,6 +96,22 @@ int main() {
     }
     const fs::path temporary = created;
     try {
+        const auto dependencies = runtime_files::dynamic_dependency_paths(
+            "\tlinux-vdso.so.1 (0x000001)\n"
+            "\tlibkrun.so.1 => /tmp/sdk install/libexec/bbm-sandbox/lib/libkrun.so.1 (0x000002)\n"
+            "\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x000003)\n"
+            "\t/lib64/ld-linux-x86-64.so.2 (0x000004)\n");
+        check(dependencies == std::vector<fs::path>{
+                  "/tmp/sdk install/libexec/bbm-sandbox/lib/libkrun.so.1",
+                  "/lib/x86_64-linux-gnu/libc.so.6", "/lib64/ld-linux-x86-64.so.2"},
+              "runtime library paths containing spaces were truncated");
+        bool missing_rejected = false;
+        try {
+            runtime_files::dynamic_dependency_paths("\tlibkrun.so.1 => not found\n");
+        } catch (const std::exception &) {
+            missing_rejected = true;
+        }
+        check(missing_rejected, "unresolved runtime library was silently ignored");
         const auto source = temporary / "source";
         fs::create_directory(source);
         std::ofstream(source / "a") << "original\n";

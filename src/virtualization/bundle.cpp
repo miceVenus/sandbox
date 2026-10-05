@@ -14,10 +14,6 @@ namespace fs = std::filesystem;
 
 void prepare_bundle(const SandboxInfo &s) {
     const auto &o = s.options;
-    const auto helper = sandbox_resources::file_helper_path();
-    require(fs::is_regular_file(helper) && access(helper.c_str(), X_OK) == 0,
-            "SDK file helper missing or not executable: " + helper.string() +
-                "; build or install the SDK resources");
     fs::create_directories(s.bundle_dir / "rootfs");
     const auto root = s.bundle_dir / "rootfs";
     for (const auto &dir : {"proc", "dev", "dev/pts", "dev/shm", "tmp", "sandbox-tools"}) {
@@ -26,8 +22,6 @@ void prepare_bundle(const SandboxInfo &s) {
     fs::create_directories(root / o.ctr_repo.relative_path());
     if (o.environment == Environment::HostTools) {
         prepare_host_tools(root);
-        fs::copy_file(helper,
-                      root / fs::path(sandbox_resources::container_file_helper).relative_path());
         for (const auto &directory : {"build", "env", "cache"}) {
             fs::create_directories(root / directory);
             fs::create_directories(s.directory / "runtime-data" / directory);
@@ -56,8 +50,12 @@ void prepare_bundle(const SandboxInfo &s) {
             }
         }
         install_runtime_program(root, "/usr/bin/git", "/usr/bin/git");
-        install_runtime_program(root, helper, sandbox_resources::container_file_helper);
     }
+
+    const auto agent = sandbox_resources::guest_agent_path();
+    require(fs::is_regular_file(agent) && access(agent.c_str(), X_OK) == 0,
+            "SDK agentd missing or not executable: " + agent.string());
+    install_runtime_program(root, agent, "/sandbox-tools/agentd");
 
     const bool rootless = geteuid() != 0;
     if (!rootless) {

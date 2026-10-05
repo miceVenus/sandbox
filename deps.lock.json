@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "crun": {
+    "repository": "https://github.com/containers/crun.git",
+    "commit": "1c57238479b53af24a2425bae762242b38485569",
+    "version": "1.30.1-60-g1c572384",
+    "libocispec_commit": "872b8b0b7ccb1a121601ede0dcac8c6b8a1008a6",
+    "configure": ["--disable-shared", "--enable-static", "--enable-libcrun", "--disable-crun", "--disable-criu", "--enable-embedded-blake3"]
+  },
+  "libkrun": {
+    "repository": "https://github.com/libkrun/libkrun.git",
+    "commit": "227b2de6ed323fe180e02f871c5f325a90c13cc2",
+    "version": "1.19.6",
+    "make": ["FEATURE_FLAGS=--locked"],
+    "soname": "libkrun.so.1"
+  },
+  "libkrunfw": {
+    "repository": "https://github.com/libkrun/libkrunfw.git",
+    "commit": "f14ac64ca8a04c6c9d76cac1c61ee050809c88c9",
+    "version": "5.6.2",
+    "soname": "libkrunfw.so.5",
+    "kernel": {
+      "url": "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.109.tar.xz",
+      "sha256": "5484e552a334e15019f4aeba89e5b58f04651cf2f4e24e04de9f152f1c38e3fa"
+    }
+  }
+}

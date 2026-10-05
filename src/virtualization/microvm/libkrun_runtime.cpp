@@ -1,5 +1,6 @@
 #include "virtualization/microvm/libkrun_runtime.hpp"
 #include "agent_client.hpp"
+#include "communication/agent_connection.hpp"
 #include "lib.hpp"
 #include "resources.hpp"
 #include "virtualization/bundle.hpp"
@@ -106,8 +107,6 @@ namespace {
             for (const auto *dir : {"build/tmp", "env/home", "cache/pip"}) {
                 fs::create_directories(info.directory / "runtime-data" / dir);
             }
-            install_runtime_program(guest_root, sandbox_resources::guest_agent_path(),
-                                    "/sandbox-tools/agentd");
             const auto &o = info.options;
             // RAM is half the Host budget; the remaining half covers the VMM and shared caches.
             const auto ram_mib = o.memory_bytes / (2 * 1024 * 1024);
@@ -130,8 +129,6 @@ namespace {
                 fs::create_directories(host_root / dir);
             }
             install_runtime_program(host_root, sandbox_resources::krun_runner_path(), runner_path);
-            fs::copy_file(sandbox_resources::krun_firmware_path(),
-                          host_root / "sandbox-tools/libkrunfw.so.5");
             write_json(host_root / "sandbox-tools/krun.json", spec);
             prepare_oci_config(host);
             std::ifstream input(host.bundle_dir / "config.json");
@@ -157,7 +154,7 @@ namespace {
             oci["process"]["args"] = {runner_path, "/sandbox-tools/krun.json"};
             oci["process"]["cwd"] = "/";
             oci["process"]["env"] = {"PATH=/bin", "LANG=C", "HOME=/",
-                                      "LD_LIBRARY_PATH=/sandbox-tools"};
+                                      "LD_LIBRARY_PATH=/sandbox-tools/lib"};
             oci["process"]["rlimits"][0]["soft"] = 1024;
             oci["process"]["rlimits"][0]["hard"] = 1024;
             write_json(host.bundle_dir / "config.json", oci);
@@ -177,6 +174,16 @@ namespace {
         }
 
         RuntimeStatus status(const SandboxInfo &info) override {
+            if (!paused_) {
+                if (const auto agent = connection_.current()) {
+                    try {
+                        agent->ping();
+                        return {RuntimeState::Running, true, "running", {}};
+                    } catch (const std::exception &error) {
+                        return {RuntimeState::Unknown, false, "unresponsive", error.what()};
+                    }
+                }
+            }
             const auto response = guard_->state(info.runtime_id);
             if (response.runtime_status != 0 || response.timed_out || response.output_limited) {
                 if (!response.timed_out && !response.output_limited &&
@@ -206,6 +213,10 @@ namespace {
         Result execute(const SandboxInfo &info, const RuntimeCommand &command) override {
             return operation(info, [&](agent::Client &client) { return client.execute(command); });
         }
+        bool cancel() override {
+            const auto client = connection_.current();
+            return client && client->cancel();
+        }
         Result read(const SandboxInfo &info, const fs::path &path, size_t limit) override {
             return operation(info, [&](agent::Client &client) {
                 Result result;
@@ -227,6 +238,7 @@ namespace {
             connect(info)->freeze_workspace(true);
             try {
                 checked(guard_->pause(info.runtime_id));
+                paused_ = true;
             } catch (...) {
                 connect(info)->freeze_workspace(false);
                 throw;
@@ -235,6 +247,7 @@ namespace {
         void resume(const SandboxInfo &info) override {
             checked(guard_->resume(info.runtime_id));
             connect(info)->freeze_workspace(false);
+            paused_ = false;
         }
         void synchronize_workspace(const SandboxInfo &info) override {
             // B is the dedicated virtiofs share. Guest syncfs precedes VM freezing.
@@ -247,7 +260,17 @@ namespace {
                     "workspace inspection requires a paused VM");
         }
         void stop(const SandboxInfo &info) override {
-            const auto current = status(info);
+            const auto state = guard_->state(info.runtime_id);
+            RuntimeStatus current;
+            if (state.runtime_status != 0 && !state.timed_out && !state.output_limited &&
+                !fs::exists(state_directory_ / info.runtime_id)) {
+                current = {RuntimeState::Missing, true, "missing", {}};
+            } else {
+                checked(state);
+                const auto value = json::parse(state.out).at("status").get<std::string>();
+                current = {value == "paused" ? RuntimeState::Paused :
+                           value == "running" ? RuntimeState::Running : RuntimeState::Stopped, true, value, {}};
+            }
             if (current.state == RuntimeState::Missing && current.verified) {
                 remove_control(info);
                 return;
@@ -273,6 +296,7 @@ namespace {
             return info.directory / "vm-control";
         }
         void remove_control(const SandboxInfo &info) {
+            connection_.clear();
             const auto console = control_directory(info) / "console.log";
             if (fs::exists(console)) {
                 fs::rename(console, info.directory / "vm-console.log");
@@ -286,32 +310,13 @@ namespace {
             require(state.at("id") == info.runtime_id, "VMM state identity mismatch");
             return state;
         }
-        std::unique_ptr<agent::Client> connect(const SandboxInfo &info,
+        std::shared_ptr<agent::Client> connect(const SandboxInfo &info,
                                              std::chrono::milliseconds timeout = std::chrono::seconds(5),
                                              bool startup = false) {
-            const auto until = agent::Clock::now() + timeout;
-            const auto socket = control_directory(info) / "agent.sock";
-            while (!fs::exists(socket) && agent::Clock::now() < until) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            }
             agent::Limits limits{info.options.max_file_bytes, info.options.max_file_bytes,
                                  info.options.max_output_bytes, uint32_t(info.options.cmd_timeout.count())};
-            for (;;) {
-                try {
-                    auto client = std::make_unique<agent::Client>(agent::connect_unix(socket, until), limits);
-                    client->handshake();
-                    return client;
-                } catch (const agent::TransportError &) {
-                    // libkrun creates the Unix proxy before the Guest calls listen.
-                    // Only the side-effect-free startup handshake may be retried.
-                    if (!startup || agent::Clock::now() >= until) {
-                        throw;
-                    }
-                    const auto state = guard_state(info);
-                    require(state.at("status") == "running", "Guest exited before ready");
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                }
-            }
+            return connection_.connect(control_directory(info) / "agent.sock", limits,
+                                       "libkrun", timeout, startup);
         }
         template <class F> Result operation(const SandboxInfo &info, F function) {
             try {
@@ -328,6 +333,8 @@ namespace {
                 return result;
             }
         }
+        agent::AgentConnection connection_;
+        bool paused_ = false;
         LibkrunConfig config_;
         fs::path state_directory_;
         std::unique_ptr<CrunWorkerClient> guard_;

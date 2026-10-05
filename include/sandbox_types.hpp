@@ -41,7 +41,6 @@ struct SandboxInfo {
     // Compatibility artifact path; only OCI backends prepare a bundle here.
     std::filesystem::path bundle_dir;
     std::filesystem::path work_files_dir;
-    std::filesystem::path helper_container_path = "/sandbox-tools/sandbox-io";
     std::string base_commit;
     std::string source_head_at_creation;
     std::optional<std::string> target_branch;

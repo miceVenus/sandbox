@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-// Runtime-local file access shared by the OCI helper and Guest service.
+// Runtime-local file access shared by the container and Guest task service.
 class WorkspaceFiles {
   public:
     explicit WorkspaceFiles(const std::filesystem::path &root);

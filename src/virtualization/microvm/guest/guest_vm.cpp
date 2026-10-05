@@ -1,4 +1,4 @@
-#include "guest/guest_vm.hpp"
+#include "virtualization/microvm/guest/guest_vm.hpp"
 
 // glibc declares MS_* as enum values; include it before Linux macro definitions.
 #include <sys/mount.h>
@@ -88,7 +88,7 @@ namespace protocol {
         }
     }
 
-    void configure_guest_vm(GuestConfig &config, const std::filesystem::path &settings) {
+    void configure_guest_vm(AgentConfig &config, const std::filesystem::path &settings) {
         struct statfs root{};
         require(geteuid() == 0 && statfs("/", &root) == 0 && root.f_type == 0x65735546,
                 "VM bootstrap requires a privileged virtiofs Guest");
@@ -121,14 +121,30 @@ namespace protocol {
         require(mount("tmpfs", "/tmp", "tmpfs", flags, "mode=1777,size=16m") == 0,
                 "mount Guest temporary directory failed");
         // cgroup subtree lives on the Guest kernel, outside all writable shares.
-        config.task_cgroup = "/sys/fs/cgroup/sandbox-tasks";
+        const std::filesystem::path task_group = "/sys/fs/cgroup/sandbox-tasks";
         set_control("/sys/fs/cgroup/cgroup.subtree_control", "+pids");
-        std::filesystem::create_directory(config.task_cgroup);
+        std::filesystem::create_directory(task_group);
         const auto pids = spec.at("max_tasks").get<size_t>();
-        set_control(config.task_cgroup / "pids.max", std::to_string(pids));
-        require(std::filesystem::exists(config.task_cgroup / "cgroup.kill"),
+        set_control(task_group / "pids.max", std::to_string(pids));
+        require(std::filesystem::exists(task_group / "cgroup.kill"),
                 "Guest kernel must support cgroup.kill");
         config.task_launcher = "/sandbox-tools/agentd";
+        config.mapped_file_identity = true;
+        config.finish_tasks = [task_group] {
+            set_control(task_group / "cgroup.kill", "1");
+            wait_event(task_group, "populated 0");
+        };
+        config.freeze_workspace = [task_group, workspace = config.workspace](bool frozen) {
+            set_control(task_group / "cgroup.freeze", frozen ? "1" : "0");
+            wait_event(task_group, frozen ? "frozen 1" : "frozen 0");
+            if (frozen) {
+                const int fd = open(workspace.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                require(fd >= 0, "open Guest workspace for synchronization failed");
+                const int result = syncfs(fd);
+                close(fd);
+                require(result == 0, "Guest workspace synchronization failed");
+            }
+        };
         config.limits.file_bytes = spec.at("file_bytes");
         config.limits.stdin_bytes = config.limits.file_bytes;
         config.limits.output_bytes = spec.at("output_bytes");
@@ -137,24 +153,4 @@ namespace protocol {
                                {"task_pids", pids}, {"network", "disabled"}};
     }
 
-    void finish_guest_tasks(const GuestConfig &config) {
-        if (config.task_cgroup.empty()) {
-            return;
-        }
-        set_control(config.task_cgroup / "cgroup.kill", "1");
-        wait_event(config.task_cgroup, "populated 0");
-    }
-
-    void freeze_guest_workspace(const GuestConfig &config, bool frozen) {
-        require(!config.task_cgroup.empty(), "workspace freeze requires Guest task isolation");
-        set_control(config.task_cgroup / "cgroup.freeze", frozen ? "1" : "0");
-        wait_event(config.task_cgroup, frozen ? "frozen 1" : "frozen 0");
-        if (frozen) {
-            const int fd = open(config.workspace.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-            require(fd >= 0, "open Guest workspace for synchronization failed");
-            const int result = syncfs(fd);
-            close(fd);
-            require(result == 0, "Guest workspace synchronization failed");
-        }
-    }
 }

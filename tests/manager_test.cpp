@@ -167,8 +167,7 @@ int main() {
         rejects([&] { manager.open(id); });
         rejects([&] { manager.create(invalid); });
         const auto legacy = manager.status().info;
-        check(legacy.options.environment == Environment::Minimal &&
-                  legacy.helper_container_path == "/usr/bin/sandbox-io",
+        check(legacy.options.environment == Environment::Minimal,
               "legacy info profile was not preserved");
         check(manager.status().runtime_status == "running", "state query failed");
         check(manager.read("/project/src/a") == "original\n", "SDK read failed");

@@ -22,6 +22,14 @@ struct ProcessSupervision {
     std::function<void(bool, std::string_view)> on_output;
     // Guest tasks must not leave children in their process group after exit.
     bool kill_remaining_group = false;
+    // Optional caller-owned control descriptor (>= 3), mapped to child FD 3.
+    // stdin/stdout/stderr remain task streams. The worker must consume and close
+    // this descriptor before starting untrusted code; all other FDs are closed.
+    int control_fd = -1;
+    // A host-created listener passed only to a runtime worker as child FD 4.
+    int listener_fd = -1;
+    // Trusted launcher environment; empty keeps the fixed PATH/LANG defaults.
+    std::vector<std::string> environment;
 };
 
 Result run_process(const std::vector<std::string> &args,

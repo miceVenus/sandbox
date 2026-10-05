@@ -1,3 +1,5 @@
+set(SANDBOX_DEPS_PREFIX "${PROJECT_SOURCE_DIR}/.deps/prefix" CACHE PATH
+    "Runtime dependency development prefix prepared by tools/build-deps.sh")
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(libgit2 CONFIG REQUIRED)

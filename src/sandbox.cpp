@@ -53,7 +53,6 @@ namespace {
                 {"file_limit", s.options.max_file_bytes},
                 {"environment",
                  s.options.environment == Environment::HostTools ? "host-tools" : "minimal"},
-                {"file_helper", s.helper_container_path.string()},
                 {"policy", int(s.options.policy)},
                 {"baseline", s.base_commit},
                 {"source_head", s.source_head_at_creation},
@@ -131,7 +130,6 @@ SandboxInfo Sandbox::load(const std::string &id) {
     s.last_error = j.at("error");
     s.rootless = j.value("rootless", false);
     s.resource_limits_verified = j.value("resource_limits_verified", false);
-    s.helper_container_path = j.value("file_helper", std::string("/usr/bin/sandbox-io"));
     auto &o = s.options;
     o.src_repo = j.at("source").get<std::string>();
     o.revision = j.at("revision");
@@ -222,18 +220,23 @@ SandboxInfo Sandbox::create(const Options &options) {
         throw std::runtime_error("sandbox " + s.id + " failed: " + s.last_error);
     }
 }
-Result Sandbox::execute(const std::vector<std::string> &argv) {
-    return execute(CommandRequest{argv, std::nullopt, {}});
+Result Sandbox::execute(const std::vector<std::string> &argv, OutputCallback on_output) {
+    return execute(CommandRequest{argv, std::nullopt, {}}, std::move(on_output));
 }
-Result Sandbox::execute(const CommandRequest &request) {
+Result Sandbox::execute(const CommandRequest &request, OutputCallback on_output) {
     const auto &id = this->id();
     require(!destroyed_, "Sandbox has been destroyed");
     valid_id(id);
     Lock lock(root_ / id / "lock");
     auto s = load(id);
-    return execute_locked(s, request);
+    return execute_locked(s, request, std::move(on_output));
 }
-Result Sandbox::execute_locked(SandboxInfo &s, const CommandRequest &request) {
+bool Sandbox::cancel() {
+    require(info_.has_value() && !destroyed_, "Sandbox must be bound and not destroyed");
+    return runtime_->cancel();
+}
+
+Result Sandbox::execute_locked(SandboxInfo &s, const CommandRequest &request, OutputCallback on_output) {
     require(s.state == SandboxState::Active, "sandbox is not active");
     require(!request.argv.empty() && !request.argv[0].empty() && request.argv[0][0] == '/',
             "command must use an absolute container path");
@@ -242,16 +245,37 @@ Result Sandbox::execute_locked(SandboxInfo &s, const CommandRequest &request) {
         require(arg.find('\0') == std::string::npos, "NUL in argument");
         bytes += arg.size();
     }
-    require(bytes <= 128 * 1024, "command arguments too large");
+    require(request.argv.size() <= 1024 && bytes <= 32 * 1024, "command arguments too large");
     require(request.stdin_data.size() <= s.options.max_file_bytes, "stdin exceeds file limit");
     const auto cwd = get_cwd(s.options.ctr_repo, request.cwd_relative.value_or(s.options.cwd_rlt));
     require_active(s);
-    const auto result = runtime_->execute(s,
-                                          RuntimeCommand{request.argv,
-                                                         cwd,
-                                                         request.stdin_data,
-                                                         int(s.options.cmd_timeout.count()),
-                                                         s.options.max_output_bytes});
+    Result result;
+    try {
+        const RuntimeCommand command{request.argv,
+                                     cwd,
+                                     request.stdin_data,
+                                     int(s.options.cmd_timeout.count()),
+                                     s.options.max_output_bytes,
+                                     std::move(on_output)};
+        result = runtime_->execute(s, command);
+    } catch (...) {
+        s.state = SandboxState::Failed;
+        s.last_error = "execution or streaming failed: ";
+        try {
+            throw;
+        } catch (const std::exception &error) {
+            s.last_error += error.what();
+        } catch (...) {
+            s.last_error += "non-standard exception";
+        }
+        try {
+            runtime_->stop(s);
+        } catch (const std::exception &cleanup) {
+            s.last_error += "; cleanup failed: " + std::string(cleanup.what());
+        }
+        save(s);
+        throw;
+    }
     handle_execution_result(s, result);
     return result;
 }

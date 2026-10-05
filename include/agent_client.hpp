@@ -1,6 +1,6 @@
 #pragma once
 
-#include "virtualization/microvm/communication/agent_transport.hpp"
+#include "communication/agent_transport.hpp"
 #include "virtualization/runtime.hpp"
 #include <mutex>
 

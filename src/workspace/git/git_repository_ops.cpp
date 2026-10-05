@@ -295,7 +295,7 @@ namespace {
     }
 } // namespace
 
-namespace git_storage::worker {
+namespace git_storage {
     SourceSnapshot inspect_source(const fs::path &requested, const std::string &revision) {
         initialize_library();
         auto root = fs::canonical(requested);
@@ -426,4 +426,4 @@ namespace git_storage::worker {
         check_git(printed, "generate Git patch");
         return output.text;
     }
-} // namespace git_storage::worker
+} // namespace git_storage

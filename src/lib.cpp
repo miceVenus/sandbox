@@ -15,7 +15,7 @@ void checked(const Result &r) {
 
 void valid_id(const std::string &id) {
     require(id.size() == 32 && id.find_first_not_of("0123456789abcdef") == std::string::npos,
-            "invalid session ID");
+            "invalid sandbox ID");
 }
 
 std::string new_id() {

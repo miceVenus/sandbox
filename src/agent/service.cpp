@@ -1,5 +1,4 @@
-#include "guest/guest_service.hpp"
-#include "guest/guest_vm.hpp"
+#include "agent/service.hpp"
 #include "virtualization/runtime.hpp"
 #include "workspace/workspace_files.hpp"
 
@@ -63,10 +62,10 @@ namespace protocol {
 
         class Service {
           public:
-            Service(std::unique_ptr<Transport> transport, GuestConfig config)
+            Service(std::unique_ptr<Transport> transport, AgentConfig config)
                 : channel_(std::move(transport)), config_(std::move(config)),
                   files_(config_.workspace), limits_(config_.limits) {
-                require(config_.io_timeout.count() > 0 && config_.idle_timeout.count() > 0 &&
+                require(config_.io_timeout.count() > 0 && config_.idle_timeout.count() >= 0 &&
                             limits_.file_bytes > 0 && limits_.file_bytes <= 64 * 1024 * 1024 &&
                             limits_.stdin_bytes > 0 && limits_.stdin_bytes <= 64 * 1024 * 1024 &&
                             limits_.output_bytes > 0 && limits_.output_bytes <= 64 * 1024 * 1024 &&
@@ -102,6 +101,7 @@ namespace protocol {
                 for (;;) {
                     const auto until =
                         upload_ ? upload_->deadline
+                                : config_.idle_timeout.count() == 0 ? Deadline::max()
                                 : Clock::now() + config_.idle_timeout +
                                       (task_ && !task_->done
                                            ? std::chrono::milliseconds(limits_.timeout_ms)
@@ -127,7 +127,7 @@ namespace protocol {
 
           private:
             void discard_upload() {
-                FileIdentity file_identity(!config_.task_cgroup.empty() && upload_ && upload_->writer);
+                FileIdentity file_identity(config_.mapped_file_identity && upload_ && upload_->writer);
                 upload_.reset();
             }
 
@@ -194,13 +194,14 @@ namespace protocol {
 
             void request(const Message &message) {
                 try {
-                    FileIdentity file_identity(!config_.task_cgroup.empty() &&
+                    FileIdentity file_identity(config_.mapped_file_identity &&
                                                message.type.compare(0, 3, "fs.") == 0);
                     if (message.type == "core.ping") {
                         reply(message.id, Flag::Terminal, "core.pong", Json::object());
                     } else if (message.type == "workspace.freeze") {
                         require(message.payload.at("frozen").is_boolean(), "invalid freeze value");
-                        freeze_guest_workspace(config_, message.payload.at("frozen"));
+                        require(bool(config_.freeze_workspace), "workspace freeze is unavailable");
+                        config_.freeze_workspace(message.payload.at("frozen"));
                         reply(message.id, Flag::Terminal, "workspace.frozen", message.payload);
                     } else if (message.type == "exec.start") {
                         auto upload = std::make_unique<Upload>();
@@ -257,7 +258,7 @@ namespace protocol {
             }
 
             void event(const Message &message) {
-                FileIdentity file_identity(!config_.task_cgroup.empty() && upload_ && upload_->writer);
+                FileIdentity file_identity(config_.mapped_file_identity && upload_ && upload_->writer);
                 if (message.type == "exec.cancel" && message.id != 0 && message.id == last_exec_) {
                     if (task_ && !task_->done) {
                         task_->cancel = true;
@@ -308,6 +309,7 @@ namespace protocol {
                         size_t stdout_offset = 0, stderr_offset = 0;
                         ProcessSupervision supervision;
                         supervision.cwd = task->command.cwd;
+                        supervision.environment = config_.task_environment;
                         supervision.cancel = &task->cancel;
                         supervision.kill_remaining_group = true;
                         supervision.on_output = [&](bool stderr_stream, std::string_view bytes) {
@@ -329,7 +331,7 @@ namespace protocol {
                                                         true,
                                                         task->command.stdin_data,
                                                         supervision);
-                        finish_guest_tasks(config_);
+                        if (config_.finish_tasks) config_.finish_tasks();
                         task->done = true;
                         reply(task->id,
                               Flag::Terminal,
@@ -340,7 +342,7 @@ namespace protocol {
                                {"cancelled", result.cancelled}});
                     } catch (const std::exception &failure) {
                         try {
-                            finish_guest_tasks(config_);
+                            if (config_.finish_tasks) config_.finish_tasks();
                         } catch (...) {
                             channel_.invalidate();
                         }
@@ -356,7 +358,7 @@ namespace protocol {
 
             // Declared before task_: the channel outlives cancellation/join during unwind.
             Channel channel_;
-            GuestConfig config_;
+            AgentConfig config_;
             WorkspaceFiles files_;
             Limits limits_;
             std::unique_ptr<Upload> upload_;
@@ -366,7 +368,7 @@ namespace protocol {
         };
     } // namespace
 
-    void serve_guest(std::unique_ptr<Transport> transport, const GuestConfig &config) {
+    void serve_agent(std::unique_ptr<Transport> transport, const AgentConfig &config) {
         Service(std::move(transport), config).run();
     }
 } // namespace protocol

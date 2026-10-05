@@ -11,11 +11,16 @@ install(TARGETS sandbox_core EXPORT bbm-sandbox-targets
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES
-  sandbox.hpp sandbox_types.hpp runtime.hpp libkrun_runtime.hpp
-  workspace_backend.hpp workspace.hpp process.hpp
-  include/agent_client.hpp
+# Preserve the public include tree after the source layout refactor. Backend
+# workers, bootstrap policies and their dependency headers remain private.
+install(FILES include/sandbox.hpp include/sandbox_types.hpp include/agent_client.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox)
+install(FILES include/virtualization/runtime.hpp include/virtualization/process.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/virtualization)
+install(FILES include/virtualization/microvm/libkrun_runtime.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/virtualization/microvm)
+install(FILES include/workspace/workspace.hpp include/workspace/workspace_backend.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/workspace)
 install(FILES include/communication/agent_transport.hpp include/communication/agent_protocol.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/communication)
 install(EXPORT bbm-sandbox-targets NAMESPACE bbm::

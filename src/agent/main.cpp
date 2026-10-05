@@ -1,7 +1,8 @@
-// SDK-internal executable, deployed inside a Guest; never a host sandbox launcher.
-#include "../../include/guest/guest_service.hpp"
-#include "../../include/guest/guest_vm.hpp"
-#include "../../include/guest/task_runner.hpp"
+// SDK-internal service, deployed as container PID 1 or inside a Guest.
+#include "agent/service.hpp"
+#include "agent/container_bootstrap.hpp"
+#include "virtualization/microvm/guest/guest_vm.hpp"
+#include "agent/task_runner.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -17,7 +18,7 @@ int main(int argc, char **argv) {
     // Dispatch before creating a transport or a worker thread. Task mode is a
     // fresh posix_spawn child, never a privilege change in the serving process.
     if (argc > 1 && std::strcmp(argv[1], "--run-task") == 0) {
-        return agent::run_guest_task(argc - 2, argv + 2);
+        return agent::run_agent_task(argc - 2, argv + 2);
     }
     try {
         agent::require(argc > 1 && std::strcmp(argv[1], "--serve") == 0,
@@ -29,27 +30,54 @@ int main(int argc, char **argv) {
             "usage: agentd --serve --workspace PATH --vsock-port PORT | --serial DEVICE | --fd FD");
         agent::require(std::string(argv[1]) == "--workspace",
                        "workspace must be configured by the launcher");
-        agent::GuestConfig config;
+        agent::AgentConfig config;
         config.workspace = argv[2];
         if (argc == 7) {
-            agent::require(std::string(argv[5]) == "--vm-config", "invalid VM bootstrap option");
-            agent::configure_guest_vm(config, argv[6]);
+            if (std::string(argv[5]) == "--vm-config") {
+                agent::configure_guest_vm(config, argv[6]);
+            } else {
+                agent::require(std::string(argv[5]) == "--container-config", "invalid bootstrap option");
+                agent::configure_container_agent(config, argv[6]);
+            }
         }
         const std::string mode = argv[3], value = argv[4];
         if (mode == "--serial") {
             auto transport =
                 agent::adopt_descriptor(open(value.c_str(), O_RDWR | O_NOCTTY | O_CLOEXEC),
                                         agent::DescriptorKind::SerialPort);
-            agent::serve_guest(std::move(transport), config);
+            agent::serve_agent(std::move(transport), config);
             return 0;
         }
         agent::require(!value.empty() && value.find_first_not_of("0123456789") == std::string::npos,
                        "invalid descriptor or port");
         const auto number = std::stoull(value);
+        if (mode == "--listen-fd") {
+            agent::require(argc == 7 && std::string(argv[5]) == "--container-config" &&
+                               number == 3, "invalid container control listener");
+            const int listener = static_cast<int>(number);
+            int accepting = 0;
+            socklen_t accepting_size = sizeof(accepting);
+            agent::require(getsockopt(listener, SOL_SOCKET, SO_ACCEPTCONN, &accepting,
+                                     &accepting_size) == 0 && accepting,
+                           "container control FD is not a listener");
+            // Each task spawn closes FDs >= 3. The socket pathname exists only in
+            // the host mount namespace, so tasks cannot open a new control connection.
+            agent::require(fcntl(listener, F_SETFD, FD_CLOEXEC) == 0, "protect listener failed");
+            for (;;) {
+                const int peer = accept4(listener, nullptr, nullptr, SOCK_CLOEXEC);
+                if (peer < 0 && errno == EINTR) continue;
+                agent::require(peer >= 0, "accept container control failed");
+                try {
+                    agent::serve_agent(agent::adopt_descriptor(peer, agent::DescriptorKind::Socket), config);
+                } catch (const std::exception &error) {
+                    std::cerr << "agentd connection: " << error.what() << '\n';
+                }
+            }
+        }
         if (mode == "--fd") {
             agent::require(number >= 3 && number <= INT32_MAX,
                            "invalid inherited socket descriptor");
-            agent::serve_guest(
+            agent::serve_agent(
                 agent::adopt_descriptor(static_cast<int>(number), agent::DescriptorKind::Socket),
                 config);
             return 0;
@@ -88,7 +116,7 @@ int main(int argc, char **argv) {
                 continue;
             }
             try {
-                agent::serve_guest(agent::adopt_descriptor(peer, agent::DescriptorKind::Socket),
+                agent::serve_agent(agent::adopt_descriptor(peer, agent::DescriptorKind::Socket),
                                    config);
             } catch (const std::exception &error) {
                 std::cerr << "agentd connection: " << error.what() << '\n';

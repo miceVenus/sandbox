@@ -1,6 +1,6 @@
 # bbm-sandbox：C++ Agent 沙箱 SDK
 
-这是一个面向 Linux 的 C++17 Agent 沙箱 SDK。它从干净的 Git 仓库创建独立任务工作区，在 OCI 容器中运行命令，并提供工作区文件读写和改动预览。工作区操作使用 libgit2，默认运行时使用 SDK 自带进程调用 libcrun。
+这是一个面向 Linux 的 C++17 Agent 沙箱 SDK。它从干净的 Git 仓库创建独立任务工作区，在 OCI 容器中运行命令，并提供工作区文件读写和改动预览。工作区操作使用 libgit2 builtin API；容器和 VM 内共用常驻 agentd，libcrun 工作进程负责生命周期操作。
 
 当前实现适合本机开发、集成和学习容器隔离流程；它还不是可直接暴露给不可信用户的生产服务。
 
@@ -86,6 +86,8 @@ sudo systemctl daemon-reload
 
 ## 构建
 
+首次先执行 `./tools/build-deps.sh --jobs 4`，构建工具清单见 [依赖说明](doc/dependencies.md)。
+
 依赖 Linux、CMake 3.21+、C/C++17 编译器、libcrun、libgit2 和 `nlohmann_json`。Git 命令仍用于 Agent 的容器内操作和测试，管理器的工作区操作使用 libgit2。rootless 沙箱要求用户命名空间和 cgroup v2。若项目旁边有 `../vcpkg`，CMake 自动使用其中的 toolchain；三个预设共享 `build/vcpkg_installed` 中的依赖。
 
 构建入口统一为三个预设：
@@ -119,17 +121,15 @@ cmake --build --preset release
 cmake --install build/release
 ```
 
-Release 库使用配置时确定的安装路径；运行前需要完成安装。更改前缀可以用 `cmake --preset release -DCMAKE_INSTALL_PREFIX=/your/prefix`，随后重新构建和安装。Debug、Test 的开发资源路径不能直接用于分发。
+Release 库默认使用配置时确定的安装路径；运行前需要完成安装。移动后可显式设置 `BBM_SANDBOX_RESOURCE_DIR`。更改前缀可以用 `cmake --preset release -DCMAKE_INSTALL_PREFIX=/your/prefix`，随后重新构建和安装。Debug、Test 的开发资源路径不能直接用于分发。
 
-三个预设分别使用 `build/release`、`build/debug`、`build/test`，均启用当前的 libkrun 后端。`debug` 和 `release` 的统一目标是 `sandbox-sdk`，`test` 是 `sandbox-tests`。后者构建测试程序，实际运行测试使用 `ctest`。内部助手按依赖构建并在支持 target folder 的 IDE 中归入 `SDK/Internal`；独立进程用于 runtime/Git 监督和 Guest 执行，因此仍保留各自的可执行文件。
+三个预设分别使用 `build/release`、`build/debug`、`build/test`，均启用当前的 libkrun 后端。`debug` 和 `release` 的统一目标是 `sandbox-sdk`，`test` 是 `sandbox-tests`。后者构建测试程序，实际运行测试使用 `ctest`。内部助手按依赖构建并在支持 target folder 的 IDE 中归入 `SDK/Internal`；内部程序只保留 agentd 与运行时生命周期助手；Git 和文件读写的独立入口已删除。
 
-libkrun/libkrunfw 默认从 `$HOME/.local/opt/libkrun` 查找，其他安装位置可用 `-DLIBKRUN_ROOT=/your/prefix`。只使用 OCI 后端时可在任一预设后添加 `-DSANDBOX_ENABLE_LIBKRUN=OFF`。不使用预设时，默认关闭测试和基准、关闭 VM 后端，使用 Debug 和开发树资源；已有 `-S/-B/-D` 配置方式仍支持。
-
-libcrun 的本机静态库为 `/usr/local/lib/libcrun.a`，配套已配置源码位于 `/home/bbm/workspace/build/crun`。当前布局自动发现该源码树，以使用匹配的生成头文件。换机器时可指定 `-DSANDBOX_LIBCRUN_SOURCE_DIR=/path/to/configured/crun`，或通过 `LIBCRUN_LIBRARY`、`LIBCRUN_INCLUDE_DIR`、`LIBCRUN_CONFIG_DIR` 和 `LIBCRUN_OCISPEC_INCLUDE_DIR` 指定匹配的库和头文件。systemd、seccomp、cap 和 json-c 开发包由 pkg-config 检查。
+运行时依赖默认来自 `.deps/prefix`，先执行 `./tools/build-deps.sh --jobs 4`。固定版本、系统构建依赖、外部 prefix 和完整验证步骤见 [可移植依赖](doc/dependencies.md)。仅使用 OCI 时，脚本加 `--without-krun`，CMake 加 `-DSANDBOX_ENABLE_LIBKRUN=OFF`。不再探测个人目录中的 crun 源码或 libkrun 安装。
 
 顶层 `CMakeLists.txt` 负责选项和构建入口，`cmake/Sandbox*.cmake` 分别负责依赖、内部助手、SDK 库、安装、测试和基准。基准默认关闭，开启和运行方式见 [benchmarks/README.md](benchmarks/README.md)。个人配置可放在已忽略的 `CMakeUserPresets.json` 中。
 
-安装包提供 SDK 库、公共头文件、内部助手，并导出 `bbm::sandbox_core`。调用方还需能找到 nlohmann_json 的 CMake package；libgit2/libcrun 由 SDK 工作进程链接，不要求调用方链接。开发助手位于 `build/<preset>/libexec/bbm-sandbox/`，安装助手位于 `PREFIX/libexec/bbm-sandbox/`；缺失时明确失败，不从调用程序旁或 PATH 查找。
+安装包提供 SDK 库、公共头文件、内部助手，并导出 `bbm::sandbox_core`。调用方还需能找到 nlohmann_json 的 CMake package；libgit2 由 SDK 库直接链接，包配置会查找它；libcrun/libkrun 仍是私有运行时依赖。开发助手位于 `build/<preset>/libexec/bbm-sandbox/`，安装助手位于 `PREFIX/libexec/bbm-sandbox/`；缺失时明确失败，不从调用程序旁或 PATH 查找。
 
 ## C++ SDK 示例
 
@@ -232,7 +232,8 @@ libkrun 位于 Host 隔离边界内的独立工作进程，SDK 调用方无需�
 三个标准预设均启用 VM；需要指定 libkrun 安装位置时：
 
 ```bash
-cmake --preset debug -DLIBKRUN_ROOT="$HOME/.local/opt/libkrun"
+./tools/build-deps.sh --jobs 4
+cmake --preset debug
 cmake --build --preset debug
 ```
 
@@ -240,7 +241,7 @@ SDK 显式选择后端：
 
 ```cpp
 #include <sandbox.hpp>
-#include <libkrun_runtime.hpp>
+#include <virtualization/microvm/libkrun_runtime.hpp>
 
 Sandbox sandbox(default_sandbox_root(), make_libkrun_backend());
 Options options;
@@ -320,7 +321,7 @@ Guest 只部署一个 `agentd`。Host 的 exec/read/write 请求通过私有 vso
 
 执行命令时，服务使用 `posix_spawn` 启动同一个只读 `agentd` 的内部 `--run-task -- COMMAND...` 模式。子进程先加入固定任务 cgroup，设置 rlimit、清除附加组、降至 UID/GID 65534 并禁止提权，然后 `execv` 用户命令。父进程持续处理协议、输出、取消与回收。
 
-`src/guest/task_runner.cpp` 保留任务准备函数，已无独立 main 或构建目标；不再部署 `sandbox-task`。非特权任务再次调用内部任务模式会被拒绝。这个模式不是 vsock RPC 操作，也不能由请求选择 cgroup 或服务权限。
+`src/agent/task_runner.cpp` 保留任务准备函数，已无独立 main 或构建目标；不再部署 `sandbox-task`。非特权任务再次调用内部任务模式会被拒绝。这个模式不是 vsock RPC 操作，也不能由请求选择 cgroup 或服务权限。
 
 ## 单实例 Sandbox
 
@@ -342,3 +343,16 @@ restored.destroy(); // 删除 B，重复调用安全
 ```
 
 新元数据为 `sandbox.json`；旧 `session.json` 记录仍可读取，并在保存时迁移。C++ 对象析构不会自动删除持久化沙箱，使用者应显式调用 `stop()` 或 `destroy()`。这是 SDK API 的不兼容变更，调用方需要重新编译并移除操作参数中的 ID。
+
+仍在运行的沙箱由一个持久连接持有。交给新 `Sandbox` 句柄或低层协议客户端接管前，
+先析构旧句柄以断开连接；析构不会停止容器/VM。同一个环境暂不支持多个句柄同时持有连接。
+
+## 常驻 agentd 与流式输出
+
+容器和 VM 共用常驻任务服务及 CBOR 协议，执行/读写不再每次启动 runtime 或文件助手。
+容器使用只向 PID 1 传入的宿主 listener FD，VM 使用 vsock 代理；两者复用共享 communication
+层。SDK 的 `execute(request, callback)` 提供 stdout/stderr 二进制分块回调；`cancel()` 可以从
+回调或另一线程发送取消。生命周期回收仍由后端独立负责。
+
+架构、控制通道边界、Git builtin 的超时约束和示例见 [通信设计](doc/communication.md)。
+此次调整不兼容旧版正在运行的容器，需要回收后重新创建。

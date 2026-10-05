@@ -10,6 +10,8 @@ std::filesystem::path default_sandbox_root();
 
 // One handle represents one workspace and one runtime. Reopen persisted resources
 // explicitly; destruction of this C++ handle does not discard the workspace.
+// Release the old handle before opening the same running environment again:
+// agentd accepts one owned connection at a time.
 class Sandbox {
   public:
     explicit Sandbox(std::filesystem::path root = default_sandbox_root());
@@ -23,8 +25,9 @@ class Sandbox {
     void open(const std::string &id);
     const std::string &id() const;
     SandboxInfo info();
-    Result execute(const CommandRequest &request);
-    Result execute(const std::vector<std::string> &argv);
+    Result execute(const CommandRequest &request, OutputCallback on_output = {});
+    Result execute(const std::vector<std::string> &argv, OutputCallback on_output = {});
+    bool cancel();
     std::string read(const std::filesystem::path &container_path);
     void write(const std::filesystem::path &container_path, std::string_view content);
     SandboxStatus status();
@@ -35,7 +38,7 @@ class Sandbox {
     void destroy();
 
   private:
-    Result execute_locked(SandboxInfo &info, const CommandRequest &request);
+    Result execute_locked(SandboxInfo &info, const CommandRequest &request, OutputCallback on_output);
     void require_active(SandboxInfo &info);
     void handle_execution_result(SandboxInfo &info, const Result &result);
     SandboxInfo load(const std::string &id);

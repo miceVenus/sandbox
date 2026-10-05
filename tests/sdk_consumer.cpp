@@ -1,7 +1,7 @@
 // This is built as a separate application against the installed SDK.
 #include <agent_client.hpp>
 #include <sandbox.hpp>
-#include <libkrun_runtime.hpp>
+#include <virtualization/microvm/libkrun_runtime.hpp>
 
 #include <iostream>
 #include <stdexcept>
@@ -65,4 +65,3 @@ int main(int argc, char **argv) {
         return 1;
     }
 }
-#include "agent_client.hpp"

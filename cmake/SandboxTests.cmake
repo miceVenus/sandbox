@@ -25,8 +25,8 @@ set_tests_properties(manager-crun manager-crun-minimal PROPERTIES TIMEOUT 60)
 add_test(NAME sdk-install COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sdk_install.py
   ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_COMMAND} ${nlohmann_json_DIR} ${libgit2_DIR}
-  ${SANDBOX_ENABLE_LIBKRUN} "${LIBKRUN_ROOT}")
-set_tests_properties(sdk-install PROPERTIES TIMEOUT 120)
+  ${SANDBOX_ENABLE_LIBKRUN} "${LIBKRUN_ROOT}" "${LIBCRUN_ROOT}" "${SANDBOX_DEPS_PREFIX}")
+set_tests_properties(sdk-install PROPERTIES TIMEOUT 240)
 
 if(SANDBOX_ENABLE_LIBKRUN)
   sandbox_add_test_program(manager_krun)

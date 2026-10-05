@@ -1,6 +1,6 @@
 // Runs only inside the Guest, as a privileged child of the control service.
 // Join the task cgroup before dropping identity and executing Agent code.
-#include "guest/task_runner.hpp"
+#include "agent/task_runner.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -12,7 +12,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
-int protocol::run_guest_task(int argc, char **argv) {
+int protocol::run_agent_task(int argc, char **argv) {
     if (argc < 2 || geteuid() != 0 || std::strcmp(argv[0], "--") != 0) {
         std::fputs("invalid Guest task invocation\n", stderr);
         return 126;

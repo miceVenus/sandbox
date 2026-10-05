@@ -197,6 +197,23 @@ int main(int argc, char **argv) {
                   "CPU quota not applied");
         }
 
+        std::string streamed_out, streamed_err;
+        const auto streamed = manager.execute(
+            std::vector<std::string>{"/bin/sh", "-c", "printf first; sleep 0.1; printf second; printf error >&2"},
+            [&](OutputStream stream, std::string_view bytes) {
+                (stream == OutputStream::Stdout ? streamed_out : streamed_err).append(bytes);
+            });
+        check(streamed.runtime_status == 0 && streamed_out == "firstsecond" && streamed_err == "error" &&
+              streamed.out == streamed_out && streamed.err == streamed_err, "SDK streaming lost output");
+        bool cancellation_sent = false;
+        const auto cancelled = manager.execute(
+            std::vector<std::string>{"/bin/sh", "-c", "printf ready; sleep 9"},
+            [&](OutputStream stream, std::string_view bytes) {
+                if (stream == OutputStream::Stdout && !bytes.empty() && !cancellation_sent)
+                    cancellation_sent = manager.cancel();
+            });
+        check(cancellation_sent && cancelled.cancelled && !cancelled.timed_out,
+              "streaming cancellation did not reclaim the task");
         auto exec = [&](std::vector<std::string> command, int expected = 0) {
             const auto result = manager.execute(command);
             check(
@@ -322,10 +339,9 @@ int main(int argc, char **argv) {
               "atomic write lost file mode");
         rejects(
             [&] { manager.write("/project/src/a", std::string(8 * 1024 * 1024 + 1, 'x')); });
-        const auto helper = info.helper_container_path.string();
-        exec({"/bin/sh", "-c", "printf 123456789 | " + helper + " write /project /project/src/a 4"},
-             2);
-        check(manager.read("/project/src/a") == "original\n", "rejected write damaged target");
+        // There is no file-helper CLI. File RPCs run inside agentd with the same
+        // bounded, atomic workspace implementation used in the Guest.
+        exec({"/bin/sh", "-c", "cat /proc/1/fd/3"}, -1);
         check(exec({"/bin/sh", "-c", "find /project -name '.sandbox-io-*'"}).empty(),
               "atomic write left temporary files");
         exec({"/bin/rm",
@@ -336,7 +352,7 @@ int main(int argc, char **argv) {
               "hard-file",
               "hard-link",
               "large-file"});
-        exec({"/bin/sh", "-c", "echo bad > " + helper}, -1);
+        exec({"/bin/sh", "-c", "echo bad > /sandbox-tools/agentd"}, -1);
         exec({"/bin/sh", "-c", "echo changed > a; rm remove; echo new > ../new"});
         check(trim(exec({"/usr/bin/git", "-C", "/project", "rev-parse", "HEAD"})) ==
                   info.base_commit,

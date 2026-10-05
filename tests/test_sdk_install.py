@@ -1,6 +1,6 @@
 """Verify the SDK-only installation using a separately built consumer and libcrun."""
-import hashlib
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -13,10 +13,12 @@ json_package = sys.argv[3]
 git_package = sys.argv[4]
 krun_enabled = len(sys.argv) > 5 and sys.argv[5] == 'ON'
 krun_root = sys.argv[6] if len(sys.argv) > 6 else ''
+crun_root = sys.argv[7]
+deps_prefix = sys.argv[8]
 
 
-def run(args, expected=0):
-    result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+def run(args, expected=0, env=None):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=120, env=env)
     assert result.returncode == expected, (args, result.stdout[-4000:], result.stderr[-4000:])
     return result
 
@@ -30,19 +32,20 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
          f'-Dnlohmann_json_DIR={json_package}', f'-Dlibgit2_DIR={git_package}', '-DSANDBOX_DEVELOPMENT_BUILD=OFF',
          '-DBUILD_TESTING=OFF', f'-DCMAKE_INSTALL_PREFIX={prefix}',
          f'-DSANDBOX_ENABLE_LIBKRUN={"ON" if krun_enabled else "OFF"}',
-         f'-DLIBKRUN_ROOT={krun_root}',
+         f'-DLIBKRUN_ROOT={krun_root}', f'-DLIBCRUN_ROOT={crun_root}',
+         f'-DSANDBOX_DEPS_PREFIX={deps_prefix}',
          '-DCMAKE_INSTALL_LIBDIR=lib'])
     run([cmake, '--build', str(build), '-j2'])
     run([cmake, '--install', str(build)])
     assert not (prefix / 'bin/sandboxctl').exists()
     assert not (prefix / 'include/bbm-sandbox/client.hpp').exists()
     assert not (prefix / 'include/bbm-sandbox/crun_worker_client.hpp').exists()
-    helper = prefix / 'libexec/bbm-sandbox/sandbox-io'
+    helper = prefix / 'libexec/bbm-sandbox/agentd'
+    assert not (prefix / 'libexec/bbm-sandbox/sandbox-io').exists()
+    assert not (prefix / 'libexec/bbm-sandbox/sandbox-git').exists()
     assert helper.is_file()
     runner = prefix / 'libexec/bbm-sandbox/sandbox-crun'
     assert runner.is_file()
-    git_worker = prefix / 'libexec/bbm-sandbox/sandbox-git'
-    assert git_worker.is_file()
     assert (prefix / 'libexec/bbm-sandbox/agentd').is_file()
     for header in ['agent_client.hpp', 'communication/agent_transport.hpp', 'communication/agent_protocol.hpp']:
         assert (prefix / 'include/bbm-sandbox' / header).is_file()
@@ -60,11 +63,12 @@ target_link_libraries(consumer PRIVATE bbm::sandbox_core)
 ''')
     caller_build = caller / 'build'
     run([cmake, '-S', str(caller), '-B', str(caller_build),
-         f'-DCMAKE_PREFIX_PATH={prefix}', f'-Dnlohmann_json_DIR={json_package}'])
+         f'-DCMAKE_PREFIX_PATH={prefix}', f'-Dnlohmann_json_DIR={json_package}',
+         f'-Dlibgit2_DIR={git_package}'])
     run([cmake, '--build', str(caller_build), '-j2'])
     consumer = caller_build / 'consumer'
     # A similarly named executable beside the caller must never be selected.
-    decoy = caller_build / 'sandbox-io'
+    decoy = caller_build / 'agentd'
     decoy.write_text('#!/bin/sh\necho WRONG_HELPER >&2\nexit 99\n')
     decoy.chmod(0o755)
 
@@ -83,8 +87,8 @@ target_link_libraries(consumer PRIVATE bbm::sandbox_core)
     record = json.loads(sessions[0].read_text())
     assert record['state'] == 7  # Stopped.
     assert record['runtime_backend'] == 'oci-crun' and record['workspace_backend'] == 'git'
-    copied = sessions[0].parent / 'bundle/rootfs' / record['file_helper'].lstrip('/')
-    assert hashlib.sha256(copied.read_bytes()).digest() == hashlib.sha256(helper.read_bytes()).digest()
+    copied = sessions[0].parent / 'bundle/rootfs/sandbox-tools/agentd'
+    assert copied.read_bytes() == helper.read_bytes()
     assert not (manager / 'runtime' / record['container_id']).exists()
     if krun_enabled:
         assert (prefix / 'libexec/bbm-sandbox/sandbox-krun').is_file()
@@ -101,7 +105,7 @@ target_link_libraries(consumer PRIVATE bbm::sandbox_core)
     original_helper = helper.read_bytes()
     helper.unlink()
     error = run([str(consumer), str(manager), str(repo)], expected=1).stderr
-    assert 'SDK file helper missing or not executable:' in error and str(helper) in error
+    assert 'SDK agentd missing or not executable:' in error and str(helper) in error
     assert 'WRONG_HELPER' not in error
     assert not any(path.name.startswith('bbm-sandbox-') for path in (manager / 'runtime').iterdir())
     assert (repo / 'a').read_text() == 'original\n'
@@ -114,8 +118,12 @@ target_link_libraries(consumer PRIVATE bbm::sandbox_core)
     assert not any(path.name.startswith('bbm-sandbox-') for path in (manager / 'runtime').iterdir())
     runner.write_bytes(original_runner)
     runner.chmod(0o755)
-    git_worker.unlink()
-    error = run([str(consumer), str(manager), str(repo)], expected=1).stderr
-    assert 'SDK Git worker missing or not executable:' in error and str(git_worker) in error
-    assert not any(path.name.startswith('bbm-sandbox-') for path in (manager / 'runtime').iterdir())
-    print('installed SDK resource test passed')
+    # Explicit resource root relocates a static SDK's helpers. Private DSOs use
+    # $ORIGIN and must not depend on the original installation prefix.
+    relocated = root / 'relocated resources'
+    shutil.move(str(prefix / 'libexec/bbm-sandbox'), relocated)
+    environment = os.environ.copy()
+    environment['BBM_SANDBOX_RESOURCE_DIR'] = str(relocated)
+    assert run([str(consumer), str(root / 'relocated-manager'), str(repo)], env=environment).stdout == 'installed SDK passed\n'
+    if krun_enabled:
+        assert run([str(consumer), str(root / 'relocated-vm'), str(repo), 'vm'], env=environment).stdout == 'installed SDK passed\n'

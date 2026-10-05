@@ -199,9 +199,15 @@ namespace protocol {
                 require(data.size() <= command.output_limit - result.out.size() - result.err.size(),
                         "Guest exceeded output limit");
                 target += data;
-                if (on_output) {
+                if (on_output || command.on_output) {
                     try {
-                        on_output(message.type == "exec.stderr", data);
+                        const bool stderr_stream = message.type == "exec.stderr";
+                        if (on_output) {
+                            on_output(stderr_stream, data);
+                        } else {
+                            command.on_output(stderr_stream ? OutputStream::Stderr : OutputStream::Stdout,
+                                              data);
+                        }
                     } catch (...) {
                         channel_.invalidate();
                         throw;

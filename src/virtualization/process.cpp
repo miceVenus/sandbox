@@ -95,6 +95,9 @@ Result run_process(const std::vector<std::string> &args,
     if (args.empty()) {
         throw std::runtime_error("empty argv");
     }
+    if (supervision.control_fd != -1 && supervision.control_fd < 3) {
+        throw std::runtime_error("control descriptor must be >= 3");
+    }
     Pipe out, err;
     InputStream input(!stdin_data.empty());
     std::vector<char *> argv;
@@ -105,7 +108,33 @@ Result run_process(const std::vector<std::string> &args,
     // The runtime gets a small, fixed environment instead of host secrets.
     char path[] = "PATH=/usr/sbin:/usr/bin:/sbin:/bin";
     char locale[] = "LANG=C";
-    char *env[] = {path, locale, nullptr};
+    std::vector<char *> env;
+    if (supervision.environment.empty()) {
+        env = {path, locale};
+    } else {
+        for (const auto &entry : supervision.environment) {
+            if (entry.find('=') == std::string::npos || entry.front() == '=' ||
+                entry.find('\0') != std::string::npos) {
+                throw std::runtime_error("invalid launcher environment");
+            }
+            env.push_back(const_cast<char *>(entry.c_str()));
+        }
+    }
+    env.push_back(nullptr);
+    struct DescriptorCopies {
+        int control = -1, listener = -1;
+        ~DescriptorCopies() { if (control >= 0) close(control); if (listener >= 0) close(listener); }
+    } copies;
+    // Copy above both target FDs before dup2, so overlapping source numbers cannot
+    // accidentally replace the listener with the request descriptor.
+    if (supervision.control_fd >= 3) {
+        copies.control = fcntl(supervision.control_fd, F_DUPFD_CLOEXEC, 5);
+        if (copies.control < 0) throw std::runtime_error("duplicate control descriptor failed");
+    }
+    if (supervision.listener_fd >= 0) {
+        copies.listener = fcntl(supervision.listener_fd, F_DUPFD_CLOEXEC, 5);
+        if (copies.listener < 0) throw std::runtime_error("duplicate listener descriptor failed");
+    }
 
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attrs;
@@ -136,13 +165,17 @@ Result run_process(const std::vector<std::string> &args,
     }
     check(posix_spawn_file_actions_adddup2(&actions, out.write_fd, 1));
     check(posix_spawn_file_actions_adddup2(&actions, err.write_fd, 2));
-    // GNU/glibc extension: do not leak the manager's descriptors into crun.
-    check(posix_spawn_file_actions_addclosefrom_np(&actions, 3));
+    // Map only the explicitly supplied control descriptor; never inherit the
+    // embedding service's other descriptors into a runtime or task.
+    if (copies.control >= 0) check(posix_spawn_file_actions_adddup2(&actions, copies.control, 3));
+    if (copies.listener >= 0) check(posix_spawn_file_actions_adddup2(&actions, copies.listener, 4));
+    check(posix_spawn_file_actions_addclosefrom_np(
+        &actions, copies.listener >= 0 ? 5 : (copies.control >= 0 ? 4 : 3)));
     check(posix_spawnattr_setflags(&attrs, POSIX_SPAWN_SETPGROUP));
     check(posix_spawnattr_setpgroup(&attrs, 0));
     pid_t pid = -1;
     if (!rc) {
-        rc = posix_spawn(&pid, argv[0], &actions, &attrs, argv.data(), env);
+        rc = posix_spawn(&pid, argv[0], &actions, &attrs, argv.data(), env.data());
     }
     posix_spawn_file_actions_destroy(&actions);
     posix_spawnattr_destroy(&attrs);

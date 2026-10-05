@@ -1,4 +1,4 @@
-#include "virtualization/microvm/communication/agent_transport.hpp"
+#include "communication/agent_transport.hpp"
 
 #include <algorithm>
 #include <cerrno>
