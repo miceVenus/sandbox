@@ -35,11 +35,11 @@ namespace protocol {
         Json payload = Json::object();
     };
 
-    std::string encode(const Message &message);
-    Message decode(std::string_view complete_frame);
-    Json binary_bytes(std::string_view content);
-    std::string binary_string(const Json &value, size_t limit);
-    uint64_t unsigned_field(const Json &value, const char *key, uint64_t maximum);
-    std::string text_field(const Json &value, const char *key, size_t maximum = 4096);
+    auto encode(const Message &message) -> std::string;
+    auto decode(std::string_view complete_frame) -> Message;
+    auto binary_bytes(std::string_view content) -> Json;
+    auto binary_string(const Json &value, size_t limit) -> std::string;
+    auto unsigned_field(const Json &value, const char *key, uint64_t maximum) -> uint64_t;
+    auto text_field(const Json &value, const char *key, size_t maximum = 4096) -> std::string;
     void require(bool condition, const std::string &message);
 } // namespace protocol

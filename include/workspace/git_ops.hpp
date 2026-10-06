@@ -12,10 +12,10 @@ namespace git_storage {
         std::optional<std::string> branch;
     };
 
-    SourceSnapshot inspect_source(const std::filesystem::path &requested,
-                                  const std::string &revision);
+    auto inspect_source(const std::filesystem::path &requested,
+                                  const std::string &revision) -> SourceSnapshot;
     void initialize_snapshot(const SourceSnapshot &source, const std::filesystem::path &session);
-    std::string status(const std::filesystem::path &session);
-    std::string diff(const std::filesystem::path &session, const std::string &baseline);
+    auto status(const std::filesystem::path &session) -> std::string;
+    auto diff(const std::filesystem::path &session, const std::string &baseline) -> std::string;
 
 } // namespace git_storage

@@ -1,4 +1,4 @@
-#include "communication/agent_transport.hpp"
+#include "ipc/agent_protocol.hpp"
 
 #include <set>
 
@@ -10,7 +10,7 @@ namespace protocol {
             }
         }
 
-        uint32_t read_u32(std::string_view input, size_t offset) {
+        auto read_u32(std::string_view input, size_t offset) -> uint32_t {
             uint32_t value = 0;
             for (size_t i = 0; i < 4; ++i) {
                 value = (value << 8) | static_cast<uint8_t>(input[offset + i]);
@@ -31,12 +31,12 @@ namespace protocol {
             }
 
           private:
-            uint8_t byte() {
+            auto byte() -> uint8_t {
                 require(offset_ < input_.size(), "truncated CBOR input");
                 return static_cast<uint8_t>(input_[offset_++]);
             }
 
-            uint64_t argument(uint8_t info) {
+            auto argument(uint8_t info) -> uint64_t {
                 if (info < 24) {
                     return info;
                 }
@@ -48,7 +48,7 @@ namespace protocol {
                 return value;
             }
 
-            std::string_view string(uint8_t head) {
+            auto string(uint8_t head) -> std::string_view {
                 const auto length = argument(head & 31);
                 require(length <= input_.size() - offset_, "truncated CBOR string");
                 const auto result = input_.substr(offset_, static_cast<size_t>(length));
@@ -116,7 +116,7 @@ namespace protocol {
             size_t nodes_ = 0;
         };
 
-        Json checked_cbor(std::string_view bytes) {
+        auto checked_cbor(std::string_view bytes) -> Json {
             CborValidator(bytes).validate();
             try {
                 return Json::from_cbor(bytes.begin(), bytes.end(), true, true);
@@ -132,7 +132,11 @@ namespace protocol {
         }
     }
 
-    uint64_t unsigned_field(const Json &value, const char *key, uint64_t maximum) {
+    auto unsigned_field(
+        const Json &value, 
+        const char *key, 
+        uint64_t maximum) -> uint64_t 
+    {
         require(value.is_object() && value.contains(key) && value.at(key).is_number_unsigned(),
                 std::string("expected unsigned field: ") + key);
         const auto result = value.at(key).get<uint64_t>();
@@ -140,7 +144,11 @@ namespace protocol {
         return result;
     }
 
-    std::string text_field(const Json &value, const char *key, size_t maximum) {
+    auto text_field(
+        const Json &value, 
+        const char *key, 
+        size_t maximum) -> std::string 
+    {
         require(value.is_object() && value.contains(key) && value.at(key).is_string(),
                 std::string("expected text field: ") + key);
         const auto result = value.at(key).get<std::string>();
@@ -149,18 +157,18 @@ namespace protocol {
         return result;
     }
 
-    Json binary_bytes(std::string_view content) {
+    auto binary_bytes(std::string_view content) -> Json {
         return Json::binary(std::vector<uint8_t>(content.begin(), content.end()));
     }
 
-    std::string binary_string(const Json &value, size_t limit) {
+    auto binary_string(const Json &value, size_t limit) -> std::string {
         require(value.is_binary(), "expected CBOR byte string");
         const auto &data = value.get_binary();
         require(data.size() <= limit, "byte string exceeds limit");
         return {data.begin(), data.end()};
     }
 
-    std::string encode(const Message &message) {
+    auto encode(const Message &message) -> std::string {
         require(!message.type.empty() && message.type.size() <= 64 &&
                     message.type.find('\0') == std::string::npos && message.payload.is_object(),
                 "invalid outgoing message");
@@ -179,7 +187,7 @@ namespace protocol {
         return frame;
     }
 
-    Message decode(std::string_view frame) {
+    auto decode(std::string_view frame) -> Message {
         require(frame.size() >= 9, "frame too short");
         const auto length = read_u32(frame, 0);
         require(length >= 5 && length <= max_frame_bytes && frame.size() == length + size_t(4),

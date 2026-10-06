@@ -1,4 +1,4 @@
-#include "workspace/git/git_repository_ops.hpp"
+#include "workspace/repository_ops.hpp"
 #include "lib.hpp"
 
 #include <chrono>
@@ -7,7 +7,6 @@
 #include <git2.h>
 #include <git2/sys/config.h>
 #include <git2/sys/repository.h>
-#include <memory>
 #include <unordered_set>
 #include <utility>
 
@@ -38,20 +37,24 @@ namespace {
         static Library library;
     }
 
-    template <class T, void (*Free)(T *)> class Handle {
+    template <class T, void (*Free)(T *)> 
+    class Handle {
       public:
         Handle() = default;
         ~Handle() {
             Free(value_);
         }
         Handle(const Handle &) = delete;
-        Handle &operator=(const Handle &) = delete;
-        Handle(Handle &&other) noexcept : value_(std::exchange(other.value_, nullptr)) {
+        Handle(Handle &&other) noexcept 
+        : value_(std::exchange(other.value_, nullptr)) {
         }
-        T *get() const {
+        auto operator=(const Handle &) -> Handle & = delete;
+
+        auto get() const -> T * {
             return value_;
         }
-        T **out() {
+
+        auto out() -> T ** {
             return &value_;
         }
 
@@ -72,13 +75,13 @@ namespace {
     using Revwalk = Handle<git_revwalk, git_revwalk_free>;
     using Commit = Handle<git_commit, git_commit_free>;
 
-    std::string hex(const git_oid *oid) {
+    auto hex(const git_oid *oid) -> std::string {
         char buffer[GIT_OID_HEXSZ + 1];
         git_oid_tostr(buffer, sizeof(buffer), oid);
         return buffer;
     }
 
-    git_oid parse_oid(const std::string &text) {
+    auto parse_oid(const std::string &text) -> git_oid {
         git_oid oid{};
         check_git(git_oid_fromstr(&oid, text.c_str()), "parse commit ID");
         return oid;
@@ -104,7 +107,7 @@ namespace {
         check_git(git_repository_set_config(repository, config.get()), "isolate Git configuration");
     }
 
-    Repository open_repository(const fs::path &git_directory, const fs::path &workdir = {}) {
+    auto open_repository(const fs::path &git_directory, const fs::path &workdir = {}) -> Repository {
         Repository repository;
         // These paths are explicitly selected trusted A or private manager data.
         // Bare opening also supports sudo access without changing global safe.directory.
@@ -118,7 +121,7 @@ namespace {
         return repository;
     }
 
-    Repository initialize_repository(const fs::path &path, bool bare) {
+    auto initialize_repository(const fs::path &path, bool bare) -> Repository {
         Repository repository;
         git_repository_init_options options = GIT_REPOSITORY_INIT_OPTIONS_INIT;
         options.flags = GIT_REPOSITORY_INIT_NO_REINIT | GIT_REPOSITORY_INIT_MKPATH;
@@ -131,7 +134,7 @@ namespace {
         return repository;
     }
 
-    Tree lookup_tree(git_repository *repository, const git_oid *oid) {
+    auto lookup_tree(git_repository *repository, const git_oid *oid) -> Tree {
         Tree tree;
         check_git(git_tree_lookup(tree.out(), repository, oid), "read Git tree");
         return tree;
@@ -216,7 +219,7 @@ namespace {
         std::chrono::steady_clock::time_point deadline_;
     };
 
-    StatusList read_status(git_repository *repository) {
+    auto read_status(git_repository *repository) -> StatusList {
         git_status_options options = GIT_STATUS_OPTIONS_INIT;
         options.flags = GIT_STATUS_OPT_INCLUDE_UNTRACKED | GIT_STATUS_OPT_RECURSE_UNTRACKED_DIRS;
         StatusList status;
@@ -224,7 +227,7 @@ namespace {
         return status;
     }
 
-    char status_code(unsigned int flags, bool index) {
+    auto status_code(unsigned int flags, bool index) -> char {
         if (flags & GIT_STATUS_CONFLICTED) {
             return 'U';
         }
@@ -244,7 +247,7 @@ namespace {
         return flags & changed ? 'M' : ' ';
     }
 
-    std::string quoted_path(const char *path) {
+    auto quoted_path(const char *path) -> std::string {
         std::string escaped;
         bool quote = false;
         for (const unsigned char ch : std::string(path)) {
@@ -255,12 +258,12 @@ namespace {
             } else if (ch < 32 || ch >= 127) {
                 quote = true;
                 escaped += '\\';
-                escaped += char('0' + (ch >> 6));
-                escaped += char('0' + ((ch >> 3) & 7));
-                escaped += char('0' + (ch & 7));
+                escaped += static_cast<char>('0' + (ch >> 6));
+                escaped += static_cast<char>('0' + ((ch >> 3) & 7));
+                escaped += static_cast<char>('0' + (ch & 7));
             } else {
                 quote = quote || ch == ' ';
-                escaped += char(ch);
+                escaped += static_cast<char>(ch);
             }
         }
         return quote ? '"' + escaped + '"' : escaped;
@@ -272,10 +275,12 @@ namespace {
         bool limited = false;
     };
 
-    int append_patch(const git_diff_delta *,
-                     const git_diff_hunk *,
-                     const git_diff_line *line,
-                     void *payload) noexcept {
+    auto append_patch(
+        const git_diff_delta *,
+        const git_diff_hunk *,
+        const git_diff_line *line,
+        void *payload) noexcept -> int 
+    {
         auto &output = *static_cast<PatchOutput *>(payload);
         try {
             const bool prefix = line->origin == '+' || line->origin == '-' || line->origin == ' ';
@@ -296,7 +301,8 @@ namespace {
 } // namespace
 
 namespace git_storage {
-    SourceSnapshot inspect_source(const fs::path &requested, const std::string &revision) {
+    
+    auto inspect_source(const fs::path &requested, const std::string &revision) -> SourceSnapshot {
         initialize_library();
         auto root = fs::canonical(requested);
         require(fs::is_directory(root), "repository must be a directory");
@@ -304,30 +310,37 @@ namespace git_storage {
             require(root != root.root_path(), "no Git worktree found");
             root = root.parent_path();
         }
+        
         git_buf discovered = GIT_BUF_INIT;
         const int discovery = git_repository_discover(&discovered, root.c_str(), 0, nullptr);
         const std::string gitdir = discovered.ptr ? discovered.ptr : "";
         git_buf_dispose(&discovered);
         check_git(discovery, "discover source Git repository");
+        
         auto repository = open_repository(gitdir, root);
         const auto status = read_status(repository.get());
         require(git_status_list_entrycount(status.get()) == 0,
                 "source repository is dirty; this version requires committed input");
+        
         Object baseline;
         check_git(
             git_revparse_single(baseline.out(), repository.get(), (revision + "^{commit}").c_str()),
             "resolve baseline commit");
+
         Commit commit;
         check_git(git_commit_lookup(commit.out(), repository.get(), git_object_id(baseline.get())),
                   "read baseline commit");
+        
         const auto tree = lookup_tree(repository.get(), git_commit_tree_id(commit.get()));
         reject_submodules(repository.get(), tree.get());
         Reference head;
         check_git(git_repository_head(head.out(), repository.get()), "read source HEAD");
+        
         SourceSnapshot result{root,
                               hex(git_object_id(baseline.get())),
                               hex(git_reference_target(head.get())),
                               std::nullopt};
+
         if (git_reference_is_branch(head.get())) {
             result.branch = git_reference_shorthand(head.get());
         }
@@ -343,6 +356,7 @@ namespace git_storage {
         git_buf_dispose(&discovered);
         check_git(code, "discover source object store");
         const auto original = open_repository(gitdir);
+        
         auto manager = initialize_repository(session / "manager.git", true);
         auto task = initialize_repository(session / "files", false);
         const auto baseline = parse_oid(source.baseline);
@@ -369,7 +383,7 @@ namespace git_storage {
         check_git(git_index_write(index.get()), "save private index");
     }
 
-    std::string status(const fs::path &session) {
+    auto status(const fs::path &session) -> std::string {
         initialize_library();
         const auto repository = open_repository(session / "manager.git", session / "files");
         const auto status = read_status(repository.get());
@@ -388,15 +402,14 @@ namespace git_storage {
                 output += status_code(entry->status, false);
             }
             output += ' ';
-            output +=
-                quoted_path(delta->old_file.path ? delta->old_file.path : delta->new_file.path);
+            output += quoted_path(delta->old_file.path ? delta->old_file.path : delta->new_file.path);
             output += '\n';
             require(output.size() <= maximum_output, "Git status exceeded 1 MiB");
         }
         return output;
     }
 
-    std::string diff(const fs::path &session, const std::string &baseline) {
+    auto diff(const fs::path &session, const std::string &baseline) -> std::string {
         initialize_library();
         const auto repository = open_repository(session / "manager.git", session / "files");
         Index index;

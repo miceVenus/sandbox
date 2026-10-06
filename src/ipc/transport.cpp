@@ -1,4 +1,4 @@
-#include "communication/agent_transport.hpp"
+#include "ipc/agent_transport.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -84,7 +84,7 @@ namespace protocol {
                 }
             }
 
-            std::string read_exact(size_t size, Deadline deadline) override {
+            auto read_exact(size_t size, Deadline deadline) -> std::string override {
                 require(size <= max_frame_bytes, "transport read exceeds frame limit");
                 std::string output(size, '\0');
                 size_t offset = 0;
@@ -114,11 +114,11 @@ namespace protocol {
         };
     } // namespace
 
-    std::unique_ptr<Transport> adopt_descriptor(int fd, DescriptorKind kind) {
+    auto adopt_descriptor(int fd, DescriptorKind kind) -> std::unique_ptr<Transport> {
         return std::make_unique<DescriptorTransport>(fd, kind);
     }
 
-    std::unique_ptr<Transport> connect_unix(const std::filesystem::path &path, Deadline deadline) {
+    auto connect_unix(const std::filesystem::path &path, Deadline deadline) -> std::unique_ptr<Transport> {
         const auto name = path.string();
         sockaddr_un address{};
         require(!name.empty() && name.find('\0') == std::string::npos &&
@@ -159,7 +159,7 @@ namespace protocol {
 
     void Channel::send(const Message &message, Deadline deadline) {
         const auto frame = encode(message);
-        std::lock_guard<std::mutex> lock(writer_);
+        std::scoped_lock lock(writer_);
         require(valid_, "agent channel is unusable");
         try {
             transport_->write_all(frame, deadline);
@@ -169,7 +169,7 @@ namespace protocol {
         }
     }
 
-    Message Channel::receive(Deadline deadline) {
+    auto Channel::receive(Deadline deadline) -> Message {
         require(valid_, "agent channel is unusable");
         try {
             auto frame = transport_->read_exact(4, deadline);

@@ -1,13 +1,15 @@
-#include "communication/agent_connection.hpp"
+#include "ipc/agent_connection.hpp"
 #include <thread>
 
 namespace protocol {
-    std::shared_ptr<Client> AgentConnection::connect(const std::filesystem::path &socket,
-                                                   Limits limits,
-                                                   std::string_view isolation,
-                                                   std::chrono::milliseconds timeout,
-                                                   bool startup) {
-        std::lock_guard<std::mutex> lock(mutex_);
+    auto AgentConnection::connect(
+        const std::filesystem::path &socket,
+        Limits limits,
+        std::string_view isolation,
+        std::chrono::milliseconds timeout,
+        bool startup) -> std::shared_ptr<Client> 
+    {
+        std::scoped_lock lock(mutex_);
         if (client_) {
             return client_;
         }
@@ -28,12 +30,12 @@ namespace protocol {
             }
         }
     }
-    std::shared_ptr<Client> AgentConnection::current() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+    auto AgentConnection::current() const -> std::shared_ptr<Client> {
+        std::scoped_lock lock(mutex_);
         return client_;
     }
     void AgentConnection::clear() {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::scoped_lock lock(mutex_);
         client_.reset();
     }
 }
