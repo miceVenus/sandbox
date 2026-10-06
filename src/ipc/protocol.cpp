@@ -1,4 +1,4 @@
-#include "ipc/agent_protocol.hpp"
+#include "ipc/protocol.hpp"
 
 #include <set>
 

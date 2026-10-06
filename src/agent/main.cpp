@@ -14,7 +14,7 @@
 
 namespace agent = protocol;
 
-int main(int argc, char **argv) {
+auto main(int argc, char **argv) -> int {
     // Dispatch before creating a transport or a worker thread. Task mode is a
     // fresh posix_spawn child, never a privilege change in the serving process.
     if (argc > 1 && std::strcmp(argv[1], "--run-task") == 0) {

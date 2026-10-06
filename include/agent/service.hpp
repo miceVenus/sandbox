@@ -1,6 +1,6 @@
 #pragma once
 
-#include "communication/agent_transport.hpp"
+#include "ipc/transport.hpp"
 #include <functional>
 
 namespace protocol {

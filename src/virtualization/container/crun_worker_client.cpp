@@ -51,19 +51,21 @@ namespace {
 
         ~ControlRequest() { close(fd_); }
         ControlRequest(const ControlRequest &) = delete;
-        ControlRequest &operator=(const ControlRequest &) = delete;
-        int fd() const { return fd_; }
+        auto operator=(const ControlRequest &) -> ControlRequest & = delete;
+        [[nodiscard]] auto fd() const -> int { return fd_; }
 
       private:
         int fd_ = -1;
     };
 } // namespace
 
-Result CrunWorkerClient::call(const crun_worker::Request &request,
-                             int timeout_ms,
-                             bool drain_until_eof,
-                             size_t output_limit,
-                             int listener_fd) {
+auto CrunWorkerClient::call(
+    const crun_worker::Request &request,
+    int timeout_ms,
+    bool drain_until_eof,
+    size_t output_limit,
+    int listener_fd) -> Result 
+{
     using nlohmann::json;
     json message{{"version", crun_worker::protocol_version},
                  {"operation", static_cast<int>(request.operation)},
@@ -98,18 +100,22 @@ Result CrunWorkerClient::call(const crun_worker::Request &request,
                        timeout_ms, output_limit, drain_until_eof, {}, supervision);
 }
 
-Result CrunWorkerClient::start(const std::string &id, const std::string &bundle, int listener_fd) {
+auto CrunWorkerClient::start(
+    const std::string &id, 
+    const std::string &bundle, 
+    int listener_fd) -> Result 
+{
     crun_worker::Request request(SANDBOX_CRUN_START, id);
     request.bundle = bundle;
     // Detached PID 1 may retain the pipes; do not wait for its lifetime.
     return call(request, 10000, false, 1024 * 1024, listener_fd);
 }
 
-Result CrunWorkerClient::state(const std::string &id) {
+auto CrunWorkerClient::state(const std::string &id) -> Result {
     return call(crun_worker::Request(SANDBOX_CRUN_STATE, id));
 }
 
-bool CrunWorkerClient::destroy(const std::string &id) {
+auto CrunWorkerClient::destroy(const std::string &id) -> bool {
     const auto killed = call(crun_worker::Request(SANDBOX_CRUN_KILL, id));
     const auto deleted = call(crun_worker::Request(SANDBOX_CRUN_DELETE, id));
     const bool ok = deleted.runtime_status == 0 && !deleted.timed_out && !deleted.output_limited;
@@ -119,10 +125,10 @@ bool CrunWorkerClient::destroy(const std::string &id) {
     return ok;
 }
 
-Result CrunWorkerClient::pause(const std::string &id) {
+auto CrunWorkerClient::pause(const std::string &id) -> Result {
     return call(crun_worker::Request(SANDBOX_CRUN_PAUSE, id));
 }
 
-Result CrunWorkerClient::resume(const std::string &id) {
+auto CrunWorkerClient::resume(const std::string &id) -> Result {
     return call(crun_worker::Request(SANDBOX_CRUN_RESUME, id));
 }

@@ -2,6 +2,7 @@
   "version": 3,
   "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
   "configurePresets": [
+
     {
       "name": "base",
       "hidden": true,
@@ -31,7 +32,10 @@
       "displayName": "Debug SDK",
       "description": "SDK with debug symbols and build-tree runtime resources",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": { 
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" 
+      }
     },
     {
       "name": "test",

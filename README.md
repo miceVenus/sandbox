@@ -13,7 +13,7 @@
 - **受监督的命令执行：**参数数组直接传给进程，不经 shell 拼接；分别捕获 stdout/stderr，并处理超时、输出上限及二进制 stdin。
 - **受限的文件 API：**SDK 可在工作区内读写二进制文件；路径边界、符号链接、特殊文件和文件大小均受检查，写入采用同目录临时文件和原子替换。
 - **C++ SDK：**构建树和安装包均提供 `sandbox_core`；安装包导出 CMake target `bbm::sandbox_core`。
-- **可替换后端：**管理器通过 `WorkspaceBackend` 与 `RuntimeBackend` 调用实现；OCI 配置、挂载、cgroup 检查和文件助手属于 OCI 后端。接口预留 guest 工作区同步步骤，供后续 VM 后端使用。
+- **可替换运行时：**`Sandbox` 通过 `RuntimeBackend` 选择 OCI 容器或 VM，工作区直接使用 `GitWorkspace`。运行时负责环境准备、隔离和任务通信，预览前先冻结写入者并同步工作区。
 
 ## 工作流程
 
@@ -199,16 +199,17 @@ read/write 拒绝工作区外路径、`..`、符号链接与特殊文件；write
 默认管理目录为普通用户的 `$XDG_STATE_HOME/bbm-sandbox`，未设置时使用
 `~/.local/state/bbm-sandbox`；root 用户使用 `/var/lib/bbm-sandbox`。可通过构造函数指定其他目录，
 后续打开同一沙箱需使用相同的目录与后端。管理目录必须由当前用户拥有，且组用户和其他用户不可写。
-旧记录缺少后端字段时按 `oci-crun`/`git` 处理；不同后端的记录会被拒绝打开。
+旧记录缺少运行时字段时按 `oci-crun` 处理；运行时不匹配的记录会被拒绝打开。
+工作区固定使用 Git，新记录不再包含 `workspace_backend`；旧记录中的 `git` 标识仍可读取。
 
 独立工作区 API `GitWorkspace::create/open/status/diff` 也予以保留。
-`files/` 是任务可写的 B，`sandbox.git/` 和 `session.txt` 是容器外的管理数据。
+`files/` 是任务可写的 B，`manager.git/` 和 `session.txt` 是容器外的管理数据。
 补丁含已提交、未提交、新增、删除和二进制文件改动；忽略文件不导出，补丁输出上限为 1 MiB。
 
 ### 替换运行时后端
 
 ```cpp
-// 显式选择默认后端；也可独立替换工作区实现。
+// 显式选择运行时，工作区始终由 GitWorkspace 管理。
 Sandbox sandbox(default_sandbox_root(), make_libcrun_backend());
 
 // 之后的 VM 实现可通过同一构造函数注入：
@@ -216,7 +217,7 @@ Sandbox sandbox(default_sandbox_root(), make_libcrun_backend());
 ```
 
 `RuntimeBackend` 提供环境准备、启动、状态、执行、读写、暂停、恢复、同步工作区和停止接口。
-管理器在预览时执行 `pause → synchronize_workspace → WorkspaceBackend::inspect → resume`。
+管理器在预览时执行 `pause → synchronize_workspace → GitWorkspace::status/diff → resume`。
 当前 OCI 后端直接挂载 B，同步步骤无需拷贝；VM 后端须在这个步骤将 guest 结果导出到宿主机 B。
 `stop` 必须回收执行资源并保留可供检查的 B，文件边界与 guest 传输也由后端负责。
 详细契约和 libkrun 接入方向见 [后端设计](doc/backends.md)。默认运行时仍为 libcrun；可选 libkrun 后端已接入真实 KVM，见下方使用方法。

@@ -12,13 +12,13 @@ struct Changes {
     std::string diff;
 };
 
-class GitWorkspace {
+class Workspace {
   public:
     static auto create(const std::filesystem::path &repository,
-                               const std::filesystem::path &session_directory,
-                               const std::string &revision = "HEAD") -> GitWorkspace;
+                       const std::filesystem::path &sandbox_directory,
+                       const std::string &revision = "HEAD") -> Workspace;
 
-    static auto open(const std::filesystem::path &session_directory) -> GitWorkspace;
+    static auto open(const std::filesystem::path &session_directory) -> Workspace;
 
     [[nodiscard]] auto files_path() const -> std::filesystem::path {
         return session_ / "files";
@@ -47,7 +47,7 @@ class GitWorkspace {
     // Future: freeze and validate B's commits, then merge or export the result.
     // Define host concurrency rules before adding apply and discard APIs.
   private:
-    GitWorkspace(std::filesystem::path session, std::filesystem::path source, std::string baseline);
+    Workspace(std::filesystem::path session, std::filesystem::path source, std::string baseline);
     void validate_files() const;
     std::filesystem::path session_, source_;
     std::string baseline_, source_head_;

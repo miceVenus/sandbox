@@ -32,7 +32,7 @@ python3 benchmarks/run.py --build-dir build/debug --workspace-mib 16 --modes hos
 
 结果包括每组原始 JSON、samples.csv、summary.json、environment.json 和中文 report.md。时间单位为 ms，字节使用整数；报告中的 MiB = 1024² bytes。测试不重置宿主缓存，因此不声称测得冷启动。内存不是预设 RAM 数值：实际从 VMM 进程与 cgroup 读取。磁盘不跟随符号链接，不把共享 /usr 工具目录计为会话新增占用。
 
-启动时间覆盖 `create` 完整调用，并额外拆出 Git B、环境准备、Runtime start；Runtime start 包含 Guest ready 和资源验证。每次运行确认 destroy 后 B、runtime 状态及 cgroup 全部消失，结束后确认 A 的 HEAD 和工作区未被更改。
+启动时间覆盖 `create` 完整调用，并额外拆出环境准备、Runtime start 和 SDK 其余耗时；Runtime start 包含 Guest ready 和资源验证。`sdk_overhead_ms` 是总 create 时间减去环境准备与启动时间，包含 Git 快照创建、请求校验和元数据写入，不是独立的 Git 耗时。历史结果的 `workspace_ms` 保留原来的测量口径。每次运行确认 destroy 后 B、runtime 状态及 cgroup 全部消失，结束后确认 A 的 HEAD 和工作区未被更改。
 
 当前脚本显式关闭 CPU quota，因为本机未委派 cpu controller。每 VM 仍配置 1 vCPU，内存和 PID 限制由 SDK 验证。编译任务只是一个小 C++ 程序，不能代表大型构建。失败不当作性能离群点丢弃：失败时保留已完成的 JSON 和临时路径，避免误删尚在运行的 VM。
 

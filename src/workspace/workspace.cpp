@@ -1,5 +1,6 @@
-#include "../../include/workspace/workspace.hpp"
-#include "../../include/workspace/git/git_repository_ops.hpp"
+#include "workspace/workspace.hpp"
+#include "lib.hpp"
+#include "workspace/git_ops.hpp"
 #include <algorithm>
 #include <fstream>
 #include <iomanip>
@@ -7,28 +8,16 @@
 #include <sys/stat.h>
 
 namespace fs = std::filesystem;
-namespace {
-    bool valid_hash(const std::string &value) {
-        return (value.size() == 40 || value.size() == 64) &&
-               std::all_of(value.begin(), value.end(), [](char c) {
-                   return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-               });
-    }
 
-    void require_directory(const fs::path &path) {
-        if (fs::symlink_status(path).type() != fs::file_type::directory) {
-            throw std::runtime_error("expected a real directory: " + path.string());
-        }
-    }
-} // namespace
-
-GitWorkspace::GitWorkspace(fs::path session, fs::path source, std::string baseline)
+Workspace::Workspace(fs::path session, fs::path source, std::string baseline)
     : session_(std::move(session)), source_(std::move(source)), baseline_(std::move(baseline)) {
 }
 
-GitWorkspace GitWorkspace::create(const fs::path &repository,
-                                  const fs::path &session_directory,
-                                  const std::string &revision) {
+auto Workspace::create(
+    const fs::path &repository,
+    const fs::path &sandbox_directory,
+    const std::string &revision) -> Workspace 
+{
     if (revision.empty() || revision.front() == '-') {
         throw std::runtime_error("invalid revision");
     }
@@ -37,18 +26,23 @@ GitWorkspace GitWorkspace::create(const fs::path &repository,
     const auto &baseline = snapshot.baseline;
 
     // Require an existing parent; canonicalize it but do not follow the leaf.
-    const fs::path requested = fs::absolute(session_directory).lexically_normal();
+    const fs::path requested = fs::absolute(sandbox_directory).lexically_normal();
     const fs::path session = fs::canonical(requested.parent_path()) / requested.filename();
+
     if (session == source || session.string().rfind(source.string() + "/", 0) == 0) {
         throw std::runtime_error("session directory must be outside the source repository");
     }
+
     if (!fs::create_directory(session)) {
         throw std::runtime_error("session directory already exists");
     }
-    GitWorkspace workspace(session, source, baseline);
+
+    Workspace workspace(session, source, baseline);
+
     try {
         fs::permissions(session, fs::perms::owner_all);
         fs::create_directory(workspace.files_path());
+        
         git_storage::initialize_snapshot(snapshot, session);
         workspace.source_head_ = snapshot.head;
         workspace.source_branch_ = snapshot.branch;
@@ -69,7 +63,7 @@ GitWorkspace GitWorkspace::create(const fs::path &repository,
     return workspace;
 }
 
-GitWorkspace GitWorkspace::open(const fs::path &session_directory) {
+auto Workspace::open(const fs::path &session_directory) -> Workspace {
     require_directory(session_directory);
     const fs::path session = fs::canonical(session_directory);
     require_directory(session / "manager.git");
@@ -78,6 +72,7 @@ GitWorkspace GitWorkspace::open(const fs::path &session_directory) {
     if (fs::symlink_status(session / "session.txt").type() != fs::file_type::regular) {
         throw std::runtime_error("invalid session metadata");
     }
+
     std::ifstream state(session / "session.txt");
     std::string marker, source, baseline;
     std::getline(state, marker);
@@ -85,21 +80,24 @@ GitWorkspace GitWorkspace::open(const fs::path &session_directory) {
     if (!state || marker != "sandbox-workspace-v1" || !valid_hash(baseline)) {
         throw std::runtime_error("invalid session metadata");
     }
-    return GitWorkspace(session, source, baseline);
+    return {session, source, baseline};
 }
 
-void GitWorkspace::validate_files() const {
+void Workspace::validate_files() const {
+
     require_directory(files_path());
     require_directory(files_path() / ".git");
+
     // B's top-level .git is the agent repository. Never traverse or trust it
     // for manager status/diff; reject other embedded Git metadata and special files.
     for (auto it = fs::recursive_directory_iterator(files_path());
          it != fs::recursive_directory_iterator();
-         ++it) {
+         ++it) 
+    {
         const auto &entry = *it;
         const auto type = entry.symlink_status().type();
         auto name = entry.path().filename().string();
-        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) -> char {
             return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : static_cast<char>(c);
         });
         if (name == ".git") {
@@ -122,12 +120,12 @@ void GitWorkspace::validate_files() const {
     }
 }
 
-std::string GitWorkspace::status() const {
+auto Workspace::status() const -> std::string {
     validate_files();
     return git_storage::status(session_);
 }
 
-std::string GitWorkspace::diff() const {
+auto Workspace::diff() const -> std::string {
     validate_files();
     return git_storage::diff(session_, baseline_);
 }

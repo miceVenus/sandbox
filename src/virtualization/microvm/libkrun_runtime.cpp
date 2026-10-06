@@ -1,6 +1,6 @@
 #include "virtualization/microvm/libkrun_runtime.hpp"
 #include "agent_client.hpp"
-#include "communication/agent_connection.hpp"
+#include "ipc/connect.hpp"
 #include "lib.hpp"
 #include "resources.hpp"
 #include "virtualization/bundle.hpp"

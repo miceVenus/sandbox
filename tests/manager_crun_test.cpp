@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
         SandboxCleanup cleanup{manager, info.id};
         const auto &id = info.id;
         check(info.options.src_repo == source && info.runtime_backend == "oci-crun" &&
-                  info.workspace_backend == "git" && info.rootless == rootless &&
+                  info.rootless == rootless &&
                   info.resource_limits_verified,
               "incorrect SDK info metadata");
 

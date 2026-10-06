@@ -120,7 +120,7 @@ int main() {
         fs::permissions(root, fs::perms::owner_all);
         const std::string id(32, 'a'), cid = "bbm-sandbox-" + id;
         fs::create_directory(root / id);
-        auto w = GitWorkspace::create(repo, root / id / "workspace");
+        auto w = Workspace::create(repo, root / id / "workspace");
         Sandbox manager(root, std::make_unique<FakeRuntime>());
         // Policy validation must reject replacing tool/data mount targets before startup.
         Options invalid;
@@ -141,6 +141,7 @@ int main() {
         auto fixture = [&] {
             json record = {{"id", id},
                            {"container_id", cid},
+                           {"workspace_backend", "git"}, // Legacy Git adapter identity.
                            {"state", int(SandboxState::Active)},
                            {"source", repo.string()},
                            {"revision", "HEAD"},
@@ -163,6 +164,17 @@ int main() {
         fixture();
         fs::rename(root / id / "sandbox.json", root / id / "session.json");
         rejects([&] { manager.read("/project/src/a"); });
+        {
+            auto legacy_record = json::parse(std::ifstream(root / id / "session.json"));
+            legacy_record["workspace_backend"] = "unsupported";
+            write(root / id / "session.json", legacy_record.dump());
+            rejects([&] {
+                Sandbox incompatible(root, std::make_unique<FakeRuntime>());
+                incompatible.open(id);
+            });
+            legacy_record["workspace_backend"] = "git";
+            write(root / id / "session.json", legacy_record.dump());
+        }
         manager.open(id);
         rejects([&] { manager.open(id); });
         rejects([&] { manager.create(invalid); });

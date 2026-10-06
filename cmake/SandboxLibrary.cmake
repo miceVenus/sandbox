@@ -2,9 +2,8 @@ add_library(sandbox_core
         src/sandbox.cpp
         src/virtualization/process.cpp
         src/workspace/workspace.cpp
-        src/workspace/workspace_backend.cpp
         src/workspace/workspace_files.cpp
-        src/workspace/git/git_repository_ops.cpp
+        src/workspace/git_ops.cpp
         src/virtualization/container/oci_runtime.cpp
         src/virtualization/oci.cpp
         src/virtualization/bundle.cpp
@@ -17,9 +16,9 @@ add_library(sandbox_core
         src/virtualization/runtime_policy.cpp
         src/resources.cpp
         src/virtualization/host_tools.cpp
-        src/communication/agent_connection.cpp
-        src/communication/agent_protocol.cpp
-        src/communication/agent_transport.cpp
+        src/ipc/connect.cpp
+        src/ipc/protocol.cpp
+        src/ipc/transport.cpp
         src/agent_client.cpp
         src/lib.cpp)
 

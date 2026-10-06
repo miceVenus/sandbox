@@ -1,8 +1,10 @@
 #include "agent_client.hpp"
 
 #include <algorithm>
+#include <mutex>
 
 namespace protocol {
+    
     RemoteError::RemoteError(std::string value, std::string message)
         : std::runtime_error(std::move(message)), code(std::move(value)) {
     }
@@ -20,19 +22,19 @@ namespace protocol {
                 "invalid agent limits");
     }
 
-    Deadline Client::deadline() const {
+    auto Client::deadline() const -> Deadline {
         return Clock::now() + io_timeout_;
     }
     void Client::require_ready() const {
         require(ready_, "agent handshake is required");
     }
-    uint32_t Client::next_id() {
+    auto Client::next_id() -> uint32_t {
         require_ready();
         require(last_id_ < UINT32_MAX, "request ID space exhausted; create a new connection");
         return ++last_id_;
     }
 
-    Message Client::receive(uint32_t id, Deadline until) {
+    auto Client::receive(uint32_t id, Deadline until) -> Message {
         auto message = channel_.receive(until);
         try {
             require(message.id == id && message.flag != Flag::Request,
@@ -49,7 +51,12 @@ namespace protocol {
         }
     }
 
-    Message Client::expect(uint32_t id, Flag flag, const char *type, Deadline until) {
+    auto Client::expect(
+        uint32_t id, 
+        Flag flag, 
+        const char *type, 
+        Deadline until) -> Message 
+    {
         auto message = receive(id, until);
         if (message.flag != flag || message.type != type) {
             channel_.invalidate();
@@ -59,7 +66,7 @@ namespace protocol {
     }
 
     void Client::handshake() {
-        std::lock_guard<std::mutex> operation(operations_);
+        std::scoped_lock operation(operations_);
         require(!ready_, "agent handshake already completed");
         const auto until = deadline();
         channel_.send({0,
@@ -102,7 +109,7 @@ namespace protocol {
     }
 
     void Client::freeze_workspace(bool frozen) {
-        std::lock_guard<std::mutex> operation(operations_);
+        std::scoped_lock operation(operations_);
         const auto id = next_id();
         const auto until = deadline();
         channel_.send({id, Flag::Request, "workspace.freeze", {{"frozen", frozen}}}, until);
@@ -124,9 +131,11 @@ namespace protocol {
         }
     }
 
-    Result Client::execute(const RuntimeCommand &command,
-                           const std::function<void(bool, std::string_view)> &on_output) {
-        std::lock_guard<std::mutex> operation(operations_);
+    auto Client::execute(
+        const RuntimeCommand &command,
+        const std::function<void(bool, std::string_view)> &on_output) -> Result     
+    {
+        std::scoped_lock operation(operations_);
         require_ready();
         require(!command.argv.empty() && command.argv.size() <= 1024 &&
                     command.argv[0].size() > 0 && command.argv[0][0] == '/' &&
@@ -160,13 +169,13 @@ namespace protocol {
             Clock::now() + std::chrono::milliseconds(command.timeout_ms) + io_timeout_;
         expect(id, Flag::Event, "exec.started", execution_until);
         {
-            std::lock_guard<std::mutex> lock(cancellation_);
+            std::scoped_lock lock(cancellation_);
             active_exec_ = id;
         }
         struct ActiveReset {
             Client &client;
             ~ActiveReset() {
-                std::lock_guard<std::mutex> lock(client.cancellation_);
+                std::scoped_lock lock(client.cancellation_);
                 client.active_exec_ = 0;
             }
         } reset{*this};
@@ -220,8 +229,8 @@ namespace protocol {
         }
     }
 
-    bool Client::cancel() {
-        std::lock_guard<std::mutex> lock(cancellation_);
+    auto Client::cancel() -> bool {
+        std::scoped_lock lock(cancellation_);
         if (!active_exec_) {
             return false;
         }
@@ -229,8 +238,8 @@ namespace protocol {
         return true;
     }
 
-    std::string Client::read(const std::filesystem::path &path, size_t limit) {
-        std::lock_guard<std::mutex> operation(operations_);
+    auto Client::read(const std::filesystem::path &path, size_t limit) -> std::string {
+        std::scoped_lock operation(operations_);
         require(limit > 0 && limit <= limits_.file_bytes, "invalid read limit");
         const auto id = next_id();
         const auto until = deadline();
@@ -261,7 +270,7 @@ namespace protocol {
     }
 
     void Client::write(const std::filesystem::path &path, std::string_view content) {
-        std::lock_guard<std::mutex> operation(operations_);
+        std::scoped_lock operation(operations_);
         require(content.size() <= limits_.file_bytes, "file exceeds negotiated limit");
         const auto id = next_id();
         const auto until = deadline();
@@ -282,7 +291,7 @@ namespace protocol {
     }
 
     void Client::ping() {
-        std::lock_guard<std::mutex> operation(operations_);
+        std::scoped_lock operation(operations_);
         const auto id = next_id();
         const auto until = deadline();
         channel_.send({id, Flag::Request, "core.ping", Json::object()}, until);

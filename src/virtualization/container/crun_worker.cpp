@@ -63,8 +63,8 @@ namespace {
     }
 } // namespace
 
-// Private SDK worker: argv contains only the executable name, never runtime flags.
-int main(int argc, char **argv) {
+// Private SDK worker: argv contains only the executable name, not the runtime flags.
+auto main(int argc, char **argv) -> int {
     try {
         if (argc != 1) {
             throw std::runtime_error("libcrun worker accepts only its private control request");

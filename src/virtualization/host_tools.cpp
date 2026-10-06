@@ -16,7 +16,7 @@ namespace {
                                                         "/lib",
                                                         "/lib64"};
 
-    bool beneath(const fs::path &path, const fs::path &directory) {
+    auto beneath(const fs::path &path, const fs::path &directory) -> bool {
         const auto relative = path.lexically_relative(directory);
         if (relative.empty() || relative.is_absolute()) {
             return false;
@@ -29,7 +29,7 @@ namespace {
         return true;
     }
 
-    bool exported_path(const fs::path &path) {
+    auto exported_path(const fs::path &path) -> bool {
         for (const auto &directory : exported_directories) {
             if (beneath(path, directory)) {
                 return true;
@@ -46,7 +46,7 @@ namespace {
     }
 } // namespace
 
-std::vector<ToolMount> host_tool_mounts() {
+auto host_tool_mounts() -> std::vector<ToolMount> {
     std::vector<ToolMount> mounts;
     for (const auto &directory : exported_directories) {
         const auto type = fs::symlink_status(directory).type();

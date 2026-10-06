@@ -1,14 +1,23 @@
 #pragma once
 
-#include "virtualization/process.hpp"
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <vector>
 
-enum class MergePolicy { ReviewOnly, AutoFastForward };
+enum class MergePolicy : uint8_t{ 
+    ReviewOnly, 
+    AutoFastForward 
+};
+
 // Minimal copies a small runtime. HostTools imports selected host tool directories read-only.
-enum class Environment { Minimal, HostTools };
-enum class SandboxState {
+enum class Environment : uint8_t{ 
+    Minimal, 
+    HostTools 
+};
+
+enum class SandboxState : uint8_t{
     Preparing,
     Active,
     Frozen,
@@ -18,6 +27,7 @@ enum class SandboxState {
     Discarded,
     Stopped
 };
+
 struct Options {
     std::string revision = "HEAD";
     std::filesystem::path src_repo;
@@ -48,7 +58,6 @@ struct SandboxInfo {
     SandboxState state = SandboxState::Preparing;
     std::string last_error;
     std::string runtime_backend = "oci-crun";
-    std::string workspace_backend = "git";
     bool rootless = false;
     bool resource_limits_verified = false;
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "process.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -8,7 +9,13 @@
 struct SandboxInfo;
 struct Options;
 
-enum class RuntimeState { Missing, Running, Paused, Stopped, Unknown };
+enum class RuntimeState : uint8_t { 
+    Missing, 
+    Running, 
+    Paused, 
+    Stopped, 
+    Unknown 
+};
 
 struct RuntimeStatus {
     RuntimeState state = RuntimeState::Unknown;
@@ -18,7 +25,11 @@ struct RuntimeStatus {
     std::string error;
 };
 
-enum class OutputStream { Stdout, Stderr };
+enum class OutputStream : uint8_t { 
+    Stdout, 
+    Stderr 
+};
+
 // Called synchronously on execute's caller thread with binary chunks. The view is
 // valid only during the callback; calling another blocking Sandbox API is rejected.
 using OutputCallback = std::function<void(OutputStream, std::string_view)>;
@@ -37,20 +48,27 @@ struct RuntimeCommand {
 class RuntimeBackend {
   public:
     virtual ~RuntimeBackend() = default;
-    virtual std::string id() const = 0;
+    [[nodiscard]] virtual auto id() const -> std::string = 0;
     virtual void configure_state_directory(const std::filesystem::path &directory) = 0;
     virtual void validate_options(const Options &options) = 0;
     virtual void prepare(SandboxInfo &info) = 0;
     // Return only after startup and resource policy enforcement are verified.
     virtual void start(SandboxInfo &info) = 0;
-    virtual RuntimeStatus status(const SandboxInfo &info) = 0;
-    virtual Result execute(const SandboxInfo &info, const RuntimeCommand &command) = 0;
+    virtual auto status(const SandboxInfo &info) -> RuntimeStatus = 0;
+    virtual auto execute(const SandboxInfo &info, const RuntimeCommand &command) -> Result = 0;
     // May be invoked concurrently with execute; false means no active task.
-    virtual bool cancel() { return false; }
-    virtual Result
-    read(const SandboxInfo &info, const std::filesystem::path &path, size_t limit) = 0;
-    virtual Result
-    write(const SandboxInfo &info, const std::filesystem::path &path, std::string_view content) = 0;
+    virtual auto cancel() -> bool { return false; }
+    
+    virtual auto read(
+        const SandboxInfo &info, 
+        const std::filesystem::path &path, 
+        size_t limit) -> Result = 0;
+
+    virtual auto write(
+        const SandboxInfo &info, 
+        const std::filesystem::path &path, 
+        std::string_view content) -> Result = 0;
+        
     virtual void pause(const SandboxInfo &info) = 0;
     virtual void resume(const SandboxInfo &info) = 0;
     // Called with writers quiesced. Export guest changes to B before host-side inspection.
@@ -59,4 +77,4 @@ class RuntimeBackend {
     virtual void stop(const SandboxInfo &info) = 0;
 };
 
-std::unique_ptr<RuntimeBackend> make_libcrun_backend();
+auto make_crun_backend() -> std::unique_ptr<RuntimeBackend>;

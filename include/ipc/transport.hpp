@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agent_protocol.hpp"
+#include "protocol.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>

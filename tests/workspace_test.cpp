@@ -26,7 +26,7 @@ int main() {
         test::commit(repo, "baseline");
         const auto baseline = trim(git(repo, {"rev-parse", "HEAD"}));
         const auto info = temp.path / "info one";
-        const auto workspace = GitWorkspace::create(repo, info);
+        const auto workspace = Workspace::create(repo, info);
         const auto files = workspace.files_path();
         check(workspace.baseline() == baseline && read(files / "main.txt") == "baseline\n",
               "wrong snapshot");
@@ -40,12 +40,12 @@ int main() {
         check(workspace.status().empty() && workspace.diff().empty(), "snapshot is dirty");
 
         fs::create_directory(repo / "nested");
-        const auto nested = GitWorkspace::create(repo / "nested", temp.path / "nested info");
+        const auto nested = Workspace::create(repo / "nested", temp.path / "nested info");
         check(nested.source_repository() == repo, "subdirectory source not resolved");
         const auto linked = temp.path / "linked worktree";
         git(repo, {"worktree", "add", "--detach", linked.string(), baseline});
         fs::create_directory(linked / "nested");
-        GitWorkspace::create(linked / "nested", temp.path / "linked info");
+        Workspace::create(linked / "nested", temp.path / "linked info");
 
         write(files / "main.txt", "agent edit\n");
         fs::remove(files / "remove.txt");
@@ -79,11 +79,11 @@ int main() {
         fs::remove(files / "new.txt");
         fs::remove(files / "binary.bin");
         check(workspace.diff().empty(), "private index retained stale changes");
-        rejects([&] { GitWorkspace::create(repo, info); });
-        rejects([&] { GitWorkspace::create(repo, repo / "nested info"); });
+        rejects([&] { Workspace::create(repo, info); });
+        rejects([&] { Workspace::create(repo, repo / "nested info"); });
         check(!fs::exists(repo / "nested info"), "failed create left a directory");
         write(repo / "main.txt", "host uncommitted\n");
-        rejects([&] { GitWorkspace::create(repo, temp.path / "dirty info"); });
+        rejects([&] { Workspace::create(repo, temp.path / "dirty info"); });
         check(!fs::exists(temp.path / "dirty info"), "dirty create left a directory");
         git(repo, {"restore", "main.txt"});
 
@@ -122,9 +122,9 @@ int main() {
         fs::remove(files / "huge.bin");
         check(workspace.diff().find("+committed in B") != std::string::npos,
               "preview did not recover");
-        rejects([&] { GitWorkspace::create(repo, temp.path / "bad revision", "not-a-revision"); });
+        rejects([&] { Workspace::create(repo, temp.path / "bad revision", "not-a-revision"); });
         write(info / "session.txt", "broken\n");
-        check(rejects([&] { GitWorkspace::open(info).status(); }).find("invalid session metadata") !=
+        check(rejects([&] { Workspace::open(info).status(); }).find("invalid session metadata") !=
                   std::string::npos,
               "corrupt workspace metadata was not rejected");
         std::cout << "SDK Git workspace tests passed\n";

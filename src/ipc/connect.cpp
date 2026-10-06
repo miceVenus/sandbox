@@ -1,4 +1,4 @@
-#include "ipc/agent_connection.hpp"
+#include "ipc/connect.hpp"
 #include <thread>
 
 namespace protocol {

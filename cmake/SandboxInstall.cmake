@@ -21,8 +21,8 @@ install(FILES include/virtualization/microvm/libkrun_runtime.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/virtualization/microvm)
 install(FILES include/workspace/workspace.hpp include/workspace/workspace_backend.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/workspace)
-install(FILES include/communication/agent_transport.hpp include/communication/agent_protocol.hpp
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/communication)
+install(FILES include/ipc/agent_transport.hpp include/ipc/agent_protocol.hpp
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/ipc)
 install(EXPORT bbm-sandbox-targets NAMESPACE bbm::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bbm-sandbox)
 configure_package_config_file(cmake/bbm-sandbox-config.cmake.in

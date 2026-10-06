@@ -1,25 +1,19 @@
 #include "workspace/workspace_files.hpp"
+#include "lib.hpp"
 #include <array>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <linux/openat2.h>
-#include <stdexcept>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
+
 namespace {
-    void require(bool value, const char *message) {
-        if (!value) {
-            throw std::runtime_error(message);
-        }
-    }
-    [[noreturn]] void system_error(const char *operation) {
-        throw std::runtime_error(std::string(operation) + ": " + std::strerror(errno));
-    }
+
     struct File {
         int fd;
         explicit File(int value) : fd(value) {
@@ -31,14 +25,16 @@ namespace {
             close(fd);
         }
         File(const File &) = delete;
-        File &operator=(const File &) = delete;
+        auto operator=(const File &) -> File & = delete;
     };
-    int open_beneath(int root, const fs::path &path, int flags) {
+
+    auto open_beneath(int root, const fs::path &path, int flags) -> int {
         open_how how{};
         how.flags = flags;
         how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV;
         return syscall(SYS_openat2, root, path.c_str(), &how, sizeof(how));
     }
+
     void validate_limit(size_t limit) {
         require(limit > 0 && limit <= 64 * 1024 * 1024, "invalid workspace file limit");
     }
@@ -79,7 +75,7 @@ WorkspaceFiles::~WorkspaceFiles() {
     close(root_fd_);
 }
 
-fs::path WorkspaceFiles::relative_file(const fs::path &path) const {
+auto WorkspaceFiles::relative_file(const fs::path &path) const -> fs::path {
     require(path.is_absolute() && path.string().size() <= 4096 &&
                 path.string().find('\0') == std::string::npos,
             "invalid workspace file path");
@@ -96,7 +92,7 @@ fs::path WorkspaceFiles::relative_file(const fs::path &path) const {
     return relative;
 }
 
-std::string WorkspaceFiles::read(const fs::path &path, size_t limit) const {
+auto WorkspaceFiles::read(const fs::path &path, size_t limit) const -> std::string {
     validate_limit(limit);
     File file(open_beneath(root_fd_, relative_file(path), O_RDONLY | O_CLOEXEC | O_NONBLOCK));
     struct stat st{};
@@ -124,8 +120,10 @@ std::string WorkspaceFiles::read(const fs::path &path, size_t limit) const {
     }
 }
 
-std::unique_ptr<WorkspaceFiles::Write> WorkspaceFiles::begin_write(const fs::path &path,
-                                                                   size_t limit) const {
+auto WorkspaceFiles::begin_write(
+    const fs::path &path,
+    size_t limit) const -> std::unique_ptr<WorkspaceFiles::Write> 
+{
     validate_limit(limit);
     const auto relative = relative_file(path);
     auto state = std::make_unique<Write::State>();
@@ -168,9 +166,12 @@ std::unique_ptr<WorkspaceFiles::Write> WorkspaceFiles::begin_write(const fs::pat
     state->temporary = std::move(name);
     return std::unique_ptr<Write>(new Write(std::move(state)));
 }
+
 WorkspaceFiles::Write::Write(std::unique_ptr<State> state) : state_(std::move(state)) {
 }
+
 WorkspaceFiles::Write::~Write() = default;
+
 void WorkspaceFiles::Write::append(std::string_view bytes) {
     require(!state_->committed, "write transaction already committed");
     require(bytes.size() <= state_->limit - state_->written, "file exceeds write limit");
@@ -186,6 +187,7 @@ void WorkspaceFiles::Write::append(std::string_view bytes) {
         bytes.remove_prefix(static_cast<size_t>(count));
     }
 }
+
 void WorkspaceFiles::Write::commit() {
     require(!state_->committed, "write transaction already committed");
     if (fchmod(state_->fd, state_->mode) != 0 || fsync(state_->fd) != 0) {

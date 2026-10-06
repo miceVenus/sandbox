@@ -40,6 +40,8 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
     assert not (prefix / 'bin/sandboxctl').exists()
     assert not (prefix / 'include/bbm-sandbox/client.hpp').exists()
     assert not (prefix / 'include/bbm-sandbox/crun_worker_client.hpp').exists()
+    assert not (prefix / 'include/bbm-sandbox/workspace/workspace_backend.hpp').exists()
+    assert (prefix / 'include/bbm-sandbox/workspace/workspace.hpp').is_file()
     helper = prefix / 'libexec/bbm-sandbox/agentd'
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-io').exists()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-git').exists()
@@ -47,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
     runner = prefix / 'libexec/bbm-sandbox/sandbox-crun'
     assert runner.is_file()
     assert (prefix / 'libexec/bbm-sandbox/agentd').is_file()
-    for header in ['agent_client.hpp', 'communication/agent_transport.hpp', 'communication/agent_protocol.hpp']:
+    for header in ['agent_client.hpp', 'ipc/agent_transport.hpp', 'ipc/agent_protocol.hpp']:
         assert (prefix / 'include/bbm-sandbox' / header).is_file()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-task').exists()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-agent').exists()
@@ -86,7 +88,7 @@ target_link_libraries(consumer PRIVATE bbm::sandbox_core)
     assert len(sessions) == 1
     record = json.loads(sessions[0].read_text())
     assert record['state'] == 7  # Stopped.
-    assert record['runtime_backend'] == 'oci-crun' and record['workspace_backend'] == 'git'
+    assert record['runtime_backend'] == 'oci-crun' and 'workspace_backend' not in record
     copied = sessions[0].parent / 'bundle/rootfs/sandbox-tools/agentd'
     assert copied.read_bytes() == helper.read_bytes()
     assert not (manager / 'runtime' / record['container_id']).exists()

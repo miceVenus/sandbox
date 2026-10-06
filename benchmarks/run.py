@@ -60,7 +60,7 @@ def aggregate(data):
     result = {"mode": data["mode"], "host_budget_mib": data["host_budget_mib"],
               "guest_ram_mib": data["guest_ram_mib"], "samples": len(runs),
               "first_create_ms": runs[0]["create_ms"], "warm_create_ms": summary([r["create_ms"] for r in warm])}
-    for key in ("workspace_ms", "prepare_ms", "runtime_start_ms", "stop_ms", "destroy_ms"):
+    for key in ("sdk_overhead_ms", "prepare_ms", "runtime_start_ms", "stop_ms", "destroy_ms"):
         result[key] = summary([r[key] for r in warm])
     for key in ("cgroup_current_bytes", "cgroup_anon_bytes", "cgroup_file_bytes", "cgroup_kernel_bytes",
                 "VmRSS_bytes", "Rss_bytes", "Pss_bytes"):
@@ -90,7 +90,7 @@ def report(out, env, summaries):
              "- 普通用户/rootless，真实 KVM + libkrun VM；1 vCPU，网络关闭。宿主仅委派 memory/pids，CPU quota 显式设为 0。",
              f"- 固定随机种子的 Git A：{env['workspace_payload_mib']} MiB 数据、128 个数据文件和 1 个 C++ 文件；A 实际分配 {env['source_disk']['allocated_bytes']/MIB:.2f} MiB（含 Git 对象）。",
              "- 每组串行运行，首个样本单独展示，其余作为重复启动样本。保留宿主页缓存；首个样本也不代表严格冷启动。P95 使用 nearest-rank，小样本 P95 接近/等于最大值。",
-             "- create 时间从 SDK create 调用到返回，包含 Git B 快照、Guest/VMM 文件准备、启动和 Guest ready/资源验证；不包含 fixture 构建、Manager 构造或后续监测。start 阶段包含保护容器启动，不是纯内核启动。",
+             "- create 时间从 SDK create 调用到返回，包含 Git B 快照、Guest/VMM 文件准备、启动和 Guest ready/资源验证；不包含 fixture 构建、Manager 构造或后续监测。start 阶段包含保护容器启动，不是纯内核启动。sdk_overhead_ms 为总 create 减去 prepare/start，包含 Git 快照、校验与元数据写入。",
              "- 内存空闲值：create 返回后等待 1 秒，从 Host VMM cgroup 和 /proc 读取。cgroup 含匿名页、文件页缓存和内核开销，memory.peak 是该 VM 生命周期内的内核统计峰值。RSS/PSS 为 VMM 进程视角，两者与 cgroup 不可相加。",
              "- 编译阶段每 10 ms 采样 memory.current，因此阶段峰值只是采样下界；生命周期 memory.peak 是内核维护的峰值。Guest meminfo 保存于原始 JSON，不能再加到 VMM RSS 上。",
              "- 磁盘实际分配为 lstat.st_blocks × 512，含目录、Git 和运行环境，无符号链接跟随。统计 Host 会话目录，HostTools 只读共享的 /usr 等目录没有复制，故不计入每会话新增占用。", "",
@@ -102,9 +102,9 @@ def report(out, env, summaries):
     for s in summaries:
         lines.append(f"| {s['mode']} | {s['host_budget_mib']} / {s['guest_ram_mib']} | {s['samples']} | {s['first_create_ms']:.1f} | {s['warm_create_ms']['median']:.1f} / {s['warm_create_ms']['p95']:.1f} | {median(s, 'idle_cgroup_current_bytes', MIB)} | {median(s, 'idle_VmRSS_bytes', MIB)} | {median(s, 'idle_Pss_bytes', MIB)} | {median(s, 'disk_ready_bytes', MIB)} |")
     lines += ["", "## 阶段与磁盘拆分（重复样本中位数）", "",
-              "| 环境 / Host MiB | Git B ms | 环境准备 ms | Runtime start ms | Guest 文件 MiB | VMM 文件 MiB | B/Git MiB | 可写运行数据 MiB |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
+              "| 环境 / Host MiB | SDK 其余耗时 ms | 环境准备 ms | Runtime start ms | Guest 文件 MiB | VMM 文件 MiB | B/Git MiB | 可写运行数据 MiB |", "|---|---:|---:|---:|---:|---:|---:|---:|"]
     for s in summaries:
-        lines.append(f"| {s['mode']} / {s['host_budget_mib']} | {median(s, 'workspace_ms')} | {median(s, 'prepare_ms')} | {median(s, 'runtime_start_ms')} | {median(s, 'disk_guest_bytes', MIB)} | {median(s, 'disk_vmm_bytes', MIB)} | {median(s, 'disk_workspace_bytes', MIB)} | {median(s, 'disk_runtime-data_bytes', MIB)} |")
+        lines.append(f"| {s['mode']} / {s['host_budget_mib']} | {median(s, 'sdk_overhead_ms')} | {median(s, 'prepare_ms')} | {median(s, 'runtime_start_ms')} | {median(s, 'disk_guest_bytes', MIB)} | {median(s, 'disk_vmm_bytes', MIB)} | {median(s, 'disk_workspace_bytes', MIB)} | {median(s, 'disk_runtime-data_bytes', MIB)} |")
     lines += ["", "## 命令与编译", "", "`/bin/true` 每个 VM 调用 6 次，统计重复启动 VM 中后 5 次的 SDK exec 总耗时，包含状态检查、RPC、Guest 执行和任务回收。", "",
               "编译任务为 `g++ -O2 /workspace/main.cpp -o /build/app`，程序使用 vector、algorithm、numeric、iostream，运行结果应为 49995000。成功只代表这个小任务，不能推广为大型项目编译需求。", "",
               "| 环境 / Host MiB | exec 中位 / P95 ms | 编译成功 / 总次数 | 编译中位 ms | 编译采样峰值 MiB | 生命周期内存峰值 MiB | 编译新增磁盘 MiB |", "|---|---:|---:|---:|---:|---:|---:|"]
@@ -184,11 +184,11 @@ def main():
         (out / "summary.json").write_text(json.dumps(summaries, indent=2) + "\n")
         with (out / "samples.csv").open("w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["mode", "host_mib", "index", "create_ms", "workspace_ms", "prepare_ms", "start_ms", "idle_cgroup_bytes", "disk_allocated_bytes"])
+            writer.writerow(["mode", "host_mib", "index", "create_ms", "sdk_overhead_ms", "prepare_ms", "start_ms", "idle_cgroup_bytes", "disk_allocated_bytes"])
             for s in summaries:
                 data = json.loads((out / f"{s['mode']}-{s['host_budget_mib']}.json").read_text())
                 for r in data["runs"]:
-                    writer.writerow([s["mode"], s["host_budget_mib"], r["index"], r["create_ms"], r["workspace_ms"], r["prepare_ms"], r["runtime_start_ms"], r["memory_idle"]["cgroup_current_bytes"], r["disk_ready"]["total"]["allocated_bytes"]])
+                    writer.writerow([s["mode"], s["host_budget_mib"], r["index"], r["create_ms"], r["sdk_overhead_ms"], r["prepare_ms"], r["runtime_start_ms"], r["memory_idle"]["cgroup_current_bytes"], r["disk_ready"]["total"]["allocated_bytes"]])
         report(out, env, summaries)
         print(f"Report: {out / 'report.md'}", flush=True)
         ok = True

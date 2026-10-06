@@ -1,9 +1,10 @@
 #include "virtualization/runtime_files.hpp"
 #include "lib.hpp"
 #include <sstream>
+
 namespace fs = std::filesystem;
 
-std::vector<fs::path> runtime_files::dynamic_dependency_paths(std::string_view output) {
+auto runtime_files::dynamic_dependency_paths(std::string_view output) -> std::vector<fs::path> {
     std::vector<fs::path> paths;
     std::istringstream lines{std::string(output)};
     std::string line;
@@ -31,10 +32,11 @@ std::vector<fs::path> runtime_files::dynamic_dependency_paths(std::string_view o
     return paths;
 }
 
-void install_runtime_program(const fs::path &rootfs,
-                     const fs::path &executable,
-                     const fs::path &container_path) {
-
+void install_runtime_program(
+    const fs::path &rootfs,
+    const fs::path &executable,
+    const fs::path &container_path) 
+{
     require(executable.is_absolute() && fs::is_regular_file(executable),
             "host executable is unavailable: " + executable.string());
 

@@ -1,7 +1,7 @@
+#include "ipc/connect.hpp"
 #include "lib.hpp"
 #include "resources.hpp"
 #include "sandbox_types.hpp"
-#include "communication/agent_connection.hpp"
 #include "virtualization/bundle.hpp"
 #include "virtualization/container/crun_worker_client.hpp"
 #include "virtualization/host_tools.hpp"
@@ -36,16 +36,16 @@ namespace {
             }
         }
         ~Listener() { close(fd_); }
-        int fd() const { return fd_; }
+        [[nodiscard]] auto fd() const -> int { return fd_; }
         Listener(const Listener &) = delete;
-        Listener &operator=(const Listener &) = delete;
+        auto operator=(const Listener &) -> Listener & = delete;
       private:
         int fd_ = -1;
     };
 
-    class OciCrunBackend final : public RuntimeBackend {
+    class CrunBackend final : public RuntimeBackend {
       public:
-        std::string id() const override { return "oci-crun"; }
+        auto id() const -> std::string override { return "oci-crun"; }
 
         void configure_state_directory(const fs::path &directory) override {
             state_directory_ = directory;
@@ -108,7 +108,7 @@ namespace {
             info.resource_limits_verified = true;
         }
 
-        RuntimeStatus status(const SandboxInfo &info) override {
+        auto status(const SandboxInfo &info) -> RuntimeStatus override {
             if (!paused_) {
                 if (const auto agent = connection_.current()) {
                     try {
@@ -142,26 +142,31 @@ namespace {
             }
         }
 
-        Result execute(const SandboxInfo &info, const RuntimeCommand &command) override {
-            return operation(info, [&](protocol::Client &agent) { return agent.execute(command); });
+        auto execute(const SandboxInfo &info, const RuntimeCommand &command) -> Result override {
+            return operation(info, [&](protocol::Client &agent) -> Result { 
+                return agent.execute(command); 
+            });
         }
-        Result read(const SandboxInfo &info, const fs::path &path, size_t limit) override {
-            return operation(info, [&](protocol::Client &agent) {
+
+        auto read(const SandboxInfo &info, const fs::path &path, size_t limit) -> Result override {
+            return operation(info, [&](protocol::Client &agent) -> Result {
                 Result result;
                 result.out = agent.read(path, limit);
                 result.runtime_status = 0;
                 return result;
             });
         }
-        Result write(const SandboxInfo &info, const fs::path &path, std::string_view content) override {
-            return operation(info, [&](protocol::Client &agent) {
+
+        auto write(const SandboxInfo &info, const fs::path &path, std::string_view content) -> Result override {
+            return operation(info, [&](protocol::Client &agent) -> Result {
                 agent.write(path, content);
                 Result result;
                 result.runtime_status = 0;
                 return result;
             });
         }
-        bool cancel() override {
+        
+        auto cancel() -> bool override {
             const auto agent = connection_.current();
             return agent && agent->cancel();
         }
@@ -192,17 +197,25 @@ namespace {
         }
 
       private:
-        fs::path control_directory(const SandboxInfo &info) const {
+        auto control_directory(const SandboxInfo &info) const -> fs::path {
             return info.directory / "container-control";
         }
-        std::shared_ptr<protocol::Client> connect(const SandboxInfo &info, bool startup = false) {
+
+        auto connect(
+            const SandboxInfo &info, 
+            bool startup = false) -> std::shared_ptr<protocol::Client> 
+        {
             protocol::Limits limits{info.options.max_file_bytes, info.options.max_file_bytes,
                                     info.options.max_output_bytes, uint32_t(info.options.cmd_timeout.count())};
             return connection_.connect(control_directory(info) / "agent.sock", limits,
                                        "oci-crun", std::chrono::seconds(5), startup);
         }
-        template <class F> Result operation(const SandboxInfo &info, F function) {
-            try { return function(*connect(info)); }
+        
+        template <class F> 
+        auto operation(const SandboxInfo &info, F function) -> Result {
+            try { 
+                return function(*connect(info)); 
+            }
             catch (const protocol::RemoteError &error) {
                 Result result;
                 result.runtime_status = 1;
@@ -216,6 +229,7 @@ namespace {
                 return result;
             }
         }
+        
         fs::path state_directory_;
         std::unique_ptr<CrunWorkerClient> client_;
         protocol::AgentConnection connection_;
@@ -223,4 +237,6 @@ namespace {
     };
 }
 
-std::unique_ptr<RuntimeBackend> make_libcrun_backend() { return std::make_unique<OciCrunBackend>(); }
+auto make_crun_backend() -> std::unique_ptr<RuntimeBackend> { 
+    return std::make_unique<CrunBackend>(); 
+}

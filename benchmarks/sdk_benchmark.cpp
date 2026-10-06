@@ -1,6 +1,7 @@
 #include "../include/sandbox.hpp"
 #include "../include/virtualization/container/crun_worker_client.hpp"
 #include "../include/virtualization/microvm/libkrun_runtime.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -78,20 +79,6 @@ class MeasuredRuntime : public RuntimeBackend {
     void resume(const SandboxInfo &s) override { inner->resume(s); }
     void synchronize_workspace(const SandboxInfo &s) override { inner->synchronize_workspace(s); }
     void stop(const SandboxInfo &s) override { inner->stop(s); }
-};
-class MeasuredWorkspace : public WorkspaceBackend {
-  public:
-    std::unique_ptr<WorkspaceBackend> inner = make_git_workspace_backend();
-    double create_ms = 0;
-    std::string id() const override { return inner->id(); }
-    WorkspaceSnapshot create(const fs::path &source, const fs::path &directory,
-                             const std::string &revision) override {
-        auto begin = Clock::now();
-        auto result = inner->create(source, directory, revision);
-        create_ms = elapsed(begin);
-        return result;
-    }
-    Changes inspect(const fs::path &p) override { return inner->inspect(p); }
 };
 static fs::path cgroup_of(int pid) {
     std::istringstream in(read_text(fs::path("/proc") / std::to_string(pid) / "cgroup"));
@@ -194,15 +181,15 @@ int main(int argc, char **argv) {
             std::cerr << mode << " " << budget << " MiB sample " << index + 1 << "/" << count << "\n";
             auto runtime = std::make_unique<MeasuredRuntime>();
             auto *rt = runtime.get();
-            auto workspace = std::make_unique<MeasuredWorkspace>();
-            auto *ws = workspace.get();
-            manager = std::make_unique<Sandbox>(root, std::move(runtime), std::move(workspace));
+            manager = std::make_unique<Sandbox>(root, std::move(runtime));
             auto begin = Clock::now();
             const auto s = manager->create(options);
             const double create_ms = elapsed(begin);
             active_id = s.id;
             json run{{"index", index}, {"sandbox_id", s.id}, {"create_ms", create_ms},
-                     {"workspace_ms", ws->create_ms}, {"prepare_ms", rt->prepare_ms},
+                     // Includes Git snapshot creation, validation and metadata writes.
+                     {"sdk_overhead_ms", std::max(0.0, create_ms - rt->prepare_ms - rt->start_ms)},
+                     {"prepare_ms", rt->prepare_ms},
                      {"runtime_start_ms", rt->start_ms}, {"resource_limits_verified", s.resource_limits_verified}};
             const auto state_result = guard.state(s.runtime_id);
             require_success(state_result);
