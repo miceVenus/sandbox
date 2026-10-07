@@ -23,14 +23,14 @@ endfunction()
 
 sandbox_add_helper(sandbox-crun cxx_std_17
         src/virtualization/container/crun_worker.cpp
-        src/virtualization/container/libcrun_operations.c)
+        src/virtualization/container/crun_ops.c)
 
 target_compile_features(sandbox-crun PRIVATE c_std_11)
 target_link_libraries(sandbox-crun PRIVATE Libcrun::Libcrun nlohmann_json::nlohmann_json)
 
 sandbox_add_helper(agentd cxx_std_17
-  src/agent/main.cpp src/agent/task_runner.cpp)
-# sandbox_core is declared in SandboxLibrary.cmake; link there to avoid a cycle.
+  src/agentd/main.cpp src/agentd/task_runner.cpp)
+# Service sources and shared implementation are attached in SandboxLibrary.cmake.
 
 if(SANDBOX_ENABLE_LIBKRUN)
   sandbox_add_helper(sandbox-krun cxx_std_17 src/virtualization/microvm/krun_runner.cpp)

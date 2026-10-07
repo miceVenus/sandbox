@@ -13,9 +13,8 @@ auto default_sandbox_root() -> std::filesystem::path;
 // agentd accepts one owned connection at a time.
 class Sandbox {
   public:
-    explicit Sandbox(const std::filesystem::path& root = default_sandbox_root());
-    Sandbox(const std::filesystem::path& root,
-            std::unique_ptr<RuntimeBackend> runtime);
+    explicit Sandbox(const std::filesystem::path &root = default_sandbox_root());
+    Sandbox(const std::filesystem::path &root, std::unique_ptr<RuntimeBackend> runtime);
     Sandbox(const Sandbox &) = delete;
     auto operator=(const Sandbox &) -> Sandbox & = delete;
 
@@ -36,7 +35,8 @@ class Sandbox {
     void destroy();
 
   private:
-    auto execute_locked(SandboxInfo &info, const CommandRequest &request, OutputCallback on_output) -> Result;
+    auto execute_locked(SandboxInfo &info, const CommandRequest &request, OutputCallback on_output)
+        -> Result;
     void require_active(SandboxInfo &info);
     void handle_execution_result(SandboxInfo &info, const Result &result);
     auto load(const std::string &id) -> SandboxInfo;

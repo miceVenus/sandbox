@@ -1,37 +1,37 @@
 // This is built as a separate application against the installed SDK.
-#include <agent_client.hpp>
 #include <sandbox.hpp>
-#include <virtualization/microvm/libkrun_runtime.hpp>
+#include <virtualization/agentd_client.hpp>
+#include <virtualization/microvm/krun_runtime.hpp>
 
 #include <iostream>
 #include <stdexcept>
 #include <sys/socket.h>
 #include <unistd.h>
 
-int main(int argc, char **argv) {
+auto main(int argc, char **argv) -> int {
     if (argc != 3 && argc != 4) {
         return 2;
     }
     const bool vm = argc == 4;
-    Sandbox sandbox(argv[1], vm ? make_libkrun_backend() : make_libcrun_backend());
+    Sandbox sandbox(argv[1], vm ? make_krun_backend() : make_crun_backend());
     std::string id;
     try {
-        // Verify that the installed low-level Agent client links independently too.
+        // Verify that the installed low-level agentd client links independently too.
         int sockets[2];
         if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) != 0) {
-            throw std::runtime_error("installed Agent socketpair failed");
+            throw std::runtime_error("installed agentd socketpair failed");
         }
-        protocol::Client agent(
-            protocol::adopt_descriptor(sockets[0], protocol::DescriptorKind::Socket));
+        virtualization::AgentdClient agentd(
+            ipc::adopt_descriptor(sockets[0], ipc::DescriptorKind::Socket));
         close(sockets[1]);
         bool refused = false;
         try {
-            agent.ping();
-        } catch (const protocol::ProtocolError &) {
+            agentd.ping();
+        } catch (const ipc::ProtocolError &) {
             refused = true;
         }
         if (!refused) {
-            throw std::runtime_error("Agent client bypassed handshake");
+            throw std::runtime_error("agentd client bypassed handshake");
         }
         Options options;
         options.src_repo = argv[2];

@@ -1,5 +1,5 @@
-#include "lib.hpp"
 #include "workspace/git_ops.hpp"
+#include "lib/error.hpp"
 
 #include <chrono>
 #include <cstring>
@@ -37,16 +37,14 @@ namespace {
         static Library library;
     }
 
-    template <class T, void (*Free)(T *)> 
-    class Handle {
+    template <class T, void (*Free)(T *)> class Handle {
       public:
         Handle() = default;
         ~Handle() {
             Free(value_);
         }
         Handle(const Handle &) = delete;
-        Handle(Handle &&other) noexcept 
-        : value_(std::exchange(other.value_, nullptr)) {
+        Handle(Handle &&other) noexcept : value_(std::exchange(other.value_, nullptr)) {
         }
         auto operator=(const Handle &) -> Handle & = delete;
 
@@ -107,7 +105,8 @@ namespace {
         check_git(git_repository_set_config(repository, config.get()), "isolate Git configuration");
     }
 
-    auto open_repository(const fs::path &git_directory, const fs::path &workdir = {}) -> Repository {
+    auto open_repository(const fs::path &git_directory, const fs::path &workdir = {})
+        -> Repository {
         Repository repository;
         // These paths are explicitly selected trusted A or private manager data.
         // Bare opening also supports sudo access without changing global safe.directory.
@@ -143,8 +142,8 @@ namespace {
     void reject_submodules(git_repository *repository, const git_tree *tree) {
         for (size_t i = 0; i < git_tree_entrycount(tree); ++i) {
             const auto *entry = git_tree_entry_byindex(tree, i);
-            require(git_tree_entry_filemode(entry) != GIT_FILEMODE_COMMIT,
-                    "submodules are not supported");
+            lib::require(git_tree_entry_filemode(entry) != GIT_FILEMODE_COMMIT,
+                         "submodules are not supported");
             if (git_tree_entry_type(entry) == GIT_OBJECT_TREE) {
                 const auto child = lookup_tree(repository, git_tree_entry_id(entry));
                 reject_submodules(repository, child.get());
@@ -181,20 +180,19 @@ namespace {
 
       private:
         void copy_object(const git_oid *oid) {
-            require(std::chrono::steady_clock::now() < deadline_, "Git object import timed out");
+            lib::require(std::chrono::steady_clock::now() < deadline_,
+                         "Git object import timed out");
             if (!seen_.insert(hex(oid)).second) {
                 return;
             }
             OdbObject object;
             check_git(git_odb_read(object.out(), source_odb_.get(), oid), "read Git object");
             git_oid written;
-            check_git(git_odb_write(&written,
-                                    destination_odb_.get(),
-                                    git_odb_object_data(object.get()),
-                                    git_odb_object_size(object.get()),
-                                    git_odb_object_type(object.get())),
-                      "copy Git object");
-            require(git_oid_equal(oid, &written), "copied Git object has an unexpected ID");
+            check_git(
+                git_odb_write(&written, destination_odb_.get(), git_odb_object_data(object.get()),
+                              git_odb_object_size(object.get()), git_odb_object_type(object.get())),
+                "copy Git object");
+            lib::require(git_oid_equal(oid, &written), "copied Git object has an unexpected ID");
         }
 
         void copy_tree(const git_oid *oid) {
@@ -275,12 +273,8 @@ namespace {
         bool limited = false;
     };
 
-    auto append_patch(
-        const git_diff_delta *,
-        const git_diff_hunk *,
-        const git_diff_line *line,
-        void *payload) noexcept -> int 
-    {
+    auto append_patch(const git_diff_delta *, const git_diff_hunk *, const git_diff_line *line,
+                      void *payload) noexcept -> int {
         auto &output = *static_cast<PatchOutput *>(payload);
         try {
             const bool prefix = line->origin == '+' || line->origin == '-' || line->origin == ' ';
@@ -300,28 +294,28 @@ namespace {
     }
 } // namespace
 
-namespace git_storage {
-    
+namespace git_ops {
+
     auto inspect_source(const fs::path &requested, const std::string &revision) -> SourceSnapshot {
         initialize_library();
         auto root = fs::canonical(requested);
-        require(fs::is_directory(root), "repository must be a directory");
+        lib::require(fs::is_directory(root), "repository must be a directory");
         while (!fs::exists(root / ".git")) {
-            require(root != root.root_path(), "no Git worktree found");
+            lib::require(root != root.root_path(), "no Git worktree found");
             root = root.parent_path();
         }
-        
+
         git_buf discovered = GIT_BUF_INIT;
         const int discovery = git_repository_discover(&discovered, root.c_str(), 0, nullptr);
         const std::string gitdir = discovered.ptr ? discovered.ptr : "";
         git_buf_dispose(&discovered);
         check_git(discovery, "discover source Git repository");
-        
+
         auto repository = open_repository(gitdir, root);
         const auto status = read_status(repository.get());
-        require(git_status_list_entrycount(status.get()) == 0,
-                "source repository is dirty; this version requires committed input");
-        
+        lib::require(git_status_list_entrycount(status.get()) == 0,
+                     "source repository is dirty; this version requires committed input");
+
         Object baseline;
         check_git(
             git_revparse_single(baseline.out(), repository.get(), (revision + "^{commit}").c_str()),
@@ -330,16 +324,14 @@ namespace git_storage {
         Commit commit;
         check_git(git_commit_lookup(commit.out(), repository.get(), git_object_id(baseline.get())),
                   "read baseline commit");
-        
+
         const auto tree = lookup_tree(repository.get(), git_commit_tree_id(commit.get()));
         reject_submodules(repository.get(), tree.get());
         Reference head;
         check_git(git_repository_head(head.out(), repository.get()), "read source HEAD");
-        
-        SourceSnapshot result{root,
-                              hex(git_object_id(baseline.get())),
-                              hex(git_reference_target(head.get())),
-                              std::nullopt};
+
+        SourceSnapshot result{root, hex(git_object_id(baseline.get())),
+                              hex(git_reference_target(head.get())), std::nullopt};
 
         if (git_reference_is_branch(head.get())) {
             result.branch = git_reference_shorthand(head.get());
@@ -347,7 +339,7 @@ namespace git_storage {
         return result;
     }
 
-    void initialize_snapshot(const SourceSnapshot &source, const fs::path &session) {
+    void initialize_snapshot(const SourceSnapshot &source, const fs::path &workspace_directory) {
         initialize_library();
         git_buf discovered = GIT_BUF_INIT;
         const int code =
@@ -356,9 +348,9 @@ namespace git_storage {
         git_buf_dispose(&discovered);
         check_git(code, "discover source object store");
         const auto original = open_repository(gitdir);
-        
-        auto manager = initialize_repository(session / "manager.git", true);
-        auto task = initialize_repository(session / "files", false);
+
+        auto manager = initialize_repository(workspace_directory / "manager.git", true);
+        auto task = initialize_repository(workspace_directory / "files", false);
         const auto baseline = parse_oid(source.baseline);
         ObjectImporter(original.get(), manager.get()).history(baseline);
         ObjectImporter(manager.get(), task.get()).history(baseline);
@@ -366,10 +358,10 @@ namespace git_storage {
         check_git(
             git_reference_create(manager_head.out(), manager.get(), "HEAD", &baseline, 1, nullptr),
             "record private baseline");
-        check_git(git_reference_create(
-                      task_branch.out(), task.get(), "refs/heads/agent", &baseline, 0, nullptr),
+        check_git(git_reference_create(task_branch.out(), task.get(), "refs/heads/sandbox",
+                                       &baseline, 0, nullptr),
                   "create task branch");
-        check_git(git_repository_set_head(task.get(), "refs/heads/agent"), "select task branch");
+        check_git(git_repository_set_head(task.get(), "refs/heads/sandbox"), "select task branch");
         git_checkout_options checkout = GIT_CHECKOUT_OPTIONS_INIT;
         checkout.checkout_strategy = GIT_CHECKOUT_FORCE;
         check_git(git_checkout_head(task.get(), &checkout), "check out task files");
@@ -383,9 +375,10 @@ namespace git_storage {
         check_git(git_index_write(index.get()), "save private index");
     }
 
-    auto status(const fs::path &session) -> std::string {
+    auto status(const fs::path &workspace_directory) -> std::string {
         initialize_library();
-        const auto repository = open_repository(session / "manager.git", session / "files");
+        const auto repository =
+            open_repository(workspace_directory / "manager.git", workspace_directory / "files");
         const auto status = read_status(repository.get());
         std::string output;
         for (size_t i = 0; i < git_status_list_entrycount(status.get()); ++i) {
@@ -402,16 +395,18 @@ namespace git_storage {
                 output += status_code(entry->status, false);
             }
             output += ' ';
-            output += quoted_path(delta->old_file.path ? delta->old_file.path : delta->new_file.path);
+            output +=
+                quoted_path(delta->old_file.path ? delta->old_file.path : delta->new_file.path);
             output += '\n';
-            require(output.size() <= maximum_output, "Git status exceeded 1 MiB");
+            lib::require(output.size() <= maximum_output, "Git status exceeded 1 MiB");
         }
         return output;
     }
 
-    auto diff(const fs::path &session, const std::string &baseline) -> std::string {
+    auto diff(const fs::path &workspace_directory, const std::string &baseline) -> std::string {
         initialize_library();
-        const auto repository = open_repository(session / "manager.git", session / "files");
+        const auto repository =
+            open_repository(workspace_directory / "manager.git", workspace_directory / "files");
         Index index;
         check_git(git_repository_index(index.out(), repository.get()), "open private index");
         check_git(git_index_update_all(index.get(), nullptr, nullptr, nullptr),
@@ -426,8 +421,8 @@ namespace git_storage {
         git_diff_options options = GIT_DIFF_OPTIONS_INIT;
         options.flags = GIT_DIFF_SHOW_BINARY;
         Diff difference;
-        check_git(git_diff_tree_to_index(
-                      difference.out(), repository.get(), tree.get(), index.get(), &options),
+        check_git(git_diff_tree_to_index(difference.out(), repository.get(), tree.get(),
+                                         index.get(), &options),
                   "compare private snapshot");
         PatchOutput output;
         const int printed =
@@ -435,8 +430,8 @@ namespace git_storage {
         if (output.error) {
             std::rethrow_exception(output.error);
         }
-        require(!output.limited, "Git diff exceeded 1 MiB; operation rejected");
+        lib::require(!output.limited, "Git diff exceeded 1 MiB; operation rejected");
         check_git(printed, "generate Git patch");
         return output.text;
     }
-} // namespace git_storage
+} // namespace git_ops

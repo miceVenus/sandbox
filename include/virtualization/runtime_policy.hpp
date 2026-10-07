@@ -1,5 +1,5 @@
 #pragma once
-#include "../sandbox_types.hpp"
+#include "sandbox_types.hpp"
 #include <nlohmann/json.hpp>
 
 // Shared enforcement for OCI workloads and an OCI-isolated VMM worker.

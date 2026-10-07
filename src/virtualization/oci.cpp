@@ -1,5 +1,6 @@
 #include "virtualization/oci.hpp"
-#include "lib.hpp"
+#include "lib/error.hpp"
+#include "lib/filesystem.hpp"
 #include "sandbox.hpp"
 #include "virtualization/host_tools.hpp"
 
@@ -9,9 +10,9 @@
 
 using json = nlohmann::json;
 
-void prepare_oci_config(const SandboxInfo &s) {
+void prepare_oci_config(const SandboxInfo &info) {
 
-    const auto &o = s.options;
+    const auto &options = info.options;
 
     const bool rootless = geteuid() != 0;
 
@@ -22,37 +23,26 @@ void prepare_oci_config(const SandboxInfo &s) {
                           {"source", source},
                           {"options", options}});
     };
-    if (o.environment == Environment::HostTools) {
+    if (options.environment == Environment::HostTools) {
         for (const auto &tools : host_tool_mounts()) {
             // Nonrecursive bind excludes nested host mounts. Never use rbind.
-            mount(tools.destination.string(),
-                  "bind",
-                  tools.source.string(),
+            mount(tools.destination.string(), "bind", tools.source.string(),
                   {"bind", "ro", "nosuid", "nodev", "private"});
         }
         for (const auto &directory : {"build", "env", "cache"}) {
-            mount(std::string("/") + directory,
-                  "bind",
-                  (s.directory / "runtime-data" / directory).string(),
+            mount(std::string("/") + directory, "bind",
+                  (info.directory / "runtime-data" / directory).string(),
                   {"bind", "rw", "nosuid", "nodev", "private"});
         }
     }
     mount("/proc", "proc", "proc", {"nosuid", "nodev", "noexec"});
     mount("/dev", "tmpfs", "tmpfs", {"nosuid", "strictatime", "mode=755", "size=65536k"});
-    mount("/dev/pts",
-          "devpts",
-          "devpts",
-          {"nosuid",
-           "noexec",
-           "newinstance",
-           "ptmxmode=0666",
-           "mode=0620",
+    mount("/dev/pts", "devpts", "devpts",
+          {"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620",
            rootless ? "gid=0" : "gid=5"});
     mount("/dev/shm", "tmpfs", "shm", {"nosuid", "nodev", "noexec", "mode=1777", "size=16m"});
     mount("/tmp", "tmpfs", "tmpfs", {"nosuid", "nodev", "noexec", "mode=1777", "size=16m"});
-    mount(o.ctr_repo.string(),
-          "bind",
-          s.work_files_dir.string(),
+    mount(options.ctr_repo.string(), "bind", info.work_files_dir.string(),
           {"bind", "rw", "nosuid", "nodev", "private"});
     json namespaces = json::array();
     for (const auto &type : {"pid", "network", "ipc", "uts", "cgroup", "mount"}) {
@@ -68,21 +58,17 @@ void prepare_oci_config(const SandboxInfo &s) {
 
     json config = {
         {"ociVersion", "1.0.0"},
-        {"hostname", "agent-sandbox"},
+        {"hostname", "agentd-sandbox"},
         {"root", {{"path", "rootfs"}, {"readonly", true}}},
         {"mounts", mounts},
         {"process",
          {{"terminal", false},
           {"user", {{"uid", 65534}, {"gid", 65534}, {"additionalGids", json::array()}}},
           {"args", {"/bin/sh", "-c", "while :; do /bin/sleep 3600; done"}},
-          {"cwd", get_cwd(o.ctr_repo, o.cwd_rlt).string()},
+          {"cwd", lib::resolve_relative_path(options.ctr_repo, options.cwd_rlt).string()},
           {"env",
-           {"PATH=/bin:/usr/bin",
-            "HOME=" + o.ctr_repo.string(),
-            "LANG=C",
-            "GIT_CONFIG_NOSYSTEM=1",
-            "GIT_CONFIG_GLOBAL=/dev/null",
-            "GIT_TERMINAL_PROMPT=0"}},
+           {"PATH=/bin:/usr/bin", "HOME=" + options.ctr_repo.string(), "LANG=C",
+            "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0"}},
           {"noNewPrivileges", true},
           {"capabilities",
            {{"bounding", json::array()},
@@ -90,28 +76,23 @@ void prepare_oci_config(const SandboxInfo &s) {
             {"permitted", json::array()},
             {"inheritable", json::array()},
             {"ambient", json::array()}}},
-          {"rlimits",
-           json::array({{{"type", "RLIMIT_NOFILE"}, {"soft", 256}, {"hard", 256}},
-                        {{"type", "RLIMIT_CORE"}, {"soft", 0}, {"hard", 0}}})}}},
+          {"rlimits", json::array({{{"type", "RLIMIT_NOFILE"}, {"soft", 256}, {"hard", 256}},
+                                   {{"type", "RLIMIT_CORE"}, {"soft", 0}, {"hard", 0}}})}}},
         {"linux",
          {{"namespaces", namespaces},
-          {"cgroupsPath", "/bbm-sandbox-" + s.id},
+          {"cgroupsPath", "/bbm-sandbox-" + info.id},
           {"resources",
            {{"devices", devices},
-            {"memory", {{"limit", o.memory_bytes}, {"swap", o.memory_bytes}}},
-            {"cpu", {{"period", o.cpu_period_us}, {"quota", o.cpu_quota_us}}},
-            {"pids", {{"limit", o.max_tasks}}}}},
+            {"memory", {{"limit", options.memory_bytes}, {"swap", options.memory_bytes}}},
+            {"cpu", {{"period", options.cpu_period_us}, {"quota", options.cpu_quota_us}}},
+            {"pids", {{"limit", options.max_tasks}}}}},
           {"maskedPaths",
-           {"/proc/kcore",
-            "/proc/keys",
-            "/proc/timer_list",
-            "/proc/latency_stats",
-            "/proc/sched_debug",
-            "/sys/firmware"}},
+           {"/proc/kcore", "/proc/keys", "/proc/timer_list", "/proc/latency_stats",
+            "/proc/sched_debug", "/sys/firmware"}},
           {"readonlyPaths",
            {"/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"}}}}};
 
-    if (o.environment == Environment::HostTools) {
+    if (options.environment == Environment::HostTools) {
         config["process"]["env"] = {"PATH=/env/python/bin:/usr/bin:/bin",
                                     "HOME=/env/home",
                                     "LANG=C",
@@ -134,18 +115,18 @@ void prepare_oci_config(const SandboxInfo &s) {
             json::array({{{"containerID", 0}, {"hostID", geteuid()}, {"size", 1}}});
         config["linux"]["gidMappings"] =
             json::array({{{"containerID", 0}, {"hostID", getegid()}, {"size", 1}}});
-        config["linux"]["cgroupsPath"] = "user.slice:bbm-sandbox:" + s.id;
+        config["linux"]["cgroupsPath"] = "user.slice:bbm-sandbox:" + info.id;
         // An unprivileged runtime cannot install a device eBPF filter. Only
         // standard /dev entries are provided; writable workspace is nodev and
         // the task has no CAP_MKNOD. There is no host /dev bind mount.
         config["linux"]["resources"].erase("devices");
     }
 
-    if (o.cpu_quota_us == 0) {
+    if (options.cpu_quota_us == 0) {
         config["linux"]["resources"].erase("cpu");
     }
-    std::ofstream out(s.bundle_dir / "config.json");
+    std::ofstream out(info.bundle_dir / "config.json");
     out << config.dump(2);
     out.close();
-    require(bool(out), "cannot write OCI config");
+    lib::require(bool(out), "cannot write OCI config");
 }

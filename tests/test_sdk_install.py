@@ -40,6 +40,10 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
     assert not (prefix / 'bin/sandboxctl').exists()
     assert not (prefix / 'include/bbm-sandbox/client.hpp').exists()
     assert not (prefix / 'include/bbm-sandbox/crun_worker_client.hpp').exists()
+    assert not (prefix / 'include/bbm-sandbox/virtualization/container/container_client.hpp').exists()
+    for header in ['virtualization/container_client.hpp', 'virtualization/session.hpp',
+                   'agentd/service.hpp', 'virtualization/container/crun_ops.h']:
+        assert not (prefix / 'include/bbm-sandbox' / header).exists()
     assert not (prefix / 'include/bbm-sandbox/workspace/workspace_backend.hpp').exists()
     assert (prefix / 'include/bbm-sandbox/workspace/workspace.hpp').is_file()
     helper = prefix / 'libexec/bbm-sandbox/agentd'
@@ -49,10 +53,10 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
     runner = prefix / 'libexec/bbm-sandbox/sandbox-crun'
     assert runner.is_file()
     assert (prefix / 'libexec/bbm-sandbox/agentd').is_file()
-    for header in ['agent_client.hpp', 'ipc/agent_transport.hpp', 'ipc/agent_protocol.hpp']:
+    for header in ['virtualization/agentd_client.hpp', 'ipc/transport.hpp', 'ipc/protocol.hpp']:
         assert (prefix / 'include/bbm-sandbox' / header).is_file()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-task').exists()
-    assert not (prefix / 'libexec/bbm-sandbox/sandbox-agent').exists()
+    assert not (prefix / 'libexec/bbm-sandbox/sandbox-agentd').exists()
 
     caller = root / 'separate application'
     caller.mkdir()
@@ -84,12 +88,12 @@ target_link_libraries(consumer PRIVATE bbm::sandbox_core)
     manager = root / 'manager'
     assert run([str(consumer), str(manager), str(repo)]).stdout == 'installed SDK passed\n'
     assert (repo / 'a').read_text() == 'original\n'
-    sessions = list(manager.glob('*/sandbox.json'))
-    assert len(sessions) == 1
-    record = json.loads(sessions[0].read_text())
+    records = list(manager.glob('*/sandbox.json'))
+    assert len(records) == 1
+    record = json.loads(records[0].read_text())
     assert record['state'] == 7  # Stopped.
     assert record['runtime_backend'] == 'oci-crun' and 'workspace_backend' not in record
-    copied = sessions[0].parent / 'bundle/rootfs/sandbox-tools/agentd'
+    copied = records[0].parent / 'bundle/rootfs/sandbox-tools/agentd'
     assert copied.read_bytes() == helper.read_bytes()
     assert not (manager / 'runtime' / record['container_id']).exists()
     if krun_enabled:

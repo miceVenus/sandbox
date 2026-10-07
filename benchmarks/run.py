@@ -117,7 +117,7 @@ def report(out, env, summaries):
         lines.append(f"| {s['mode']} / {s['host_budget_mib']} | {median(s, 'stop_ms')} | {median(s, 'destroy_ms')} | {'通过' if s['cleanup_all_passed'] else '失败'} |")
     lines += ["", "## 共享与测量限制", "",
               f"本次构建 libexec 工具目录实际分配 {env['sdk_libexec_disk']['allocated_bytes']/MIB:.2f} MiB；这是一次性的共享构建资源，已从每会话目录统计中分离。静态 SDK archive 和编译输出不属于运行中的会话占用。",
-              "当前实现仍逐会话复制 Guest agent、动态依赖、VMM 和 libkrunfw。磁盘准备可能成为启动成本，不能据此认为 libkrun 内核本身启动慢。该测试没有清空缓存、关闭 swap 或更改宿主调度配置，也没有测并发多 VM、长时间任务、pip 安装或大项目编译。",
+              "当前实现仍逐会话复制 Guest agentd、动态依赖、VMM 和 libkrunfw。磁盘准备可能成为启动成本，不能据此认为 libkrun 内核本身启动慢。该测试没有清空缓存、关闭 swap 或更改宿主调度配置，也没有测并发多 VM、长时间任务、pip 安装或大项目编译。",
               "Host 上限和 Guest RAM 是容量配置，不是已使用物理内存；空闲 Guest 不会触及全部 RAM。cgroup 文件缓存计费受缓存首次归属影响，也不等于整台宿主机内存增量。这里统计的是 VMM cgroup/进程，未覆盖宿主 Manager、Git worker 等短时准备进程的峰值。",
               "权限不允许读取 smaps_rollup 时 PSS 标为不可读取，不用 RSS 冒充 PSS。峰值和磁盘原始数据、memory.events/OOM、Guest meminfo、命令状态及回收检查均在对应 JSON 中。", "",
               "复现命令见 ../README.md。原始环境见 environment.json，聚合数据见 summary.json；不设性能阈值，也未把基准加入 CTest。", ""]

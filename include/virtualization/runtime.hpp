@@ -1,6 +1,6 @@
 #pragma once
 
-#include "process.hpp"
+#include "lib/process.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -9,13 +9,7 @@
 struct SandboxInfo;
 struct Options;
 
-enum class RuntimeState : uint8_t { 
-    Missing, 
-    Running, 
-    Paused, 
-    Stopped, 
-    Unknown 
-};
+enum class RuntimeState : uint8_t { Missing, Running, Paused, Stopped, Unknown };
 
 struct RuntimeStatus {
     RuntimeState state = RuntimeState::Unknown;
@@ -25,10 +19,7 @@ struct RuntimeStatus {
     std::string error;
 };
 
-enum class OutputStream : uint8_t { 
-    Stdout, 
-    Stderr 
-};
+enum class OutputStream : uint8_t { Stdout, Stderr };
 
 // Called synchronously on execute's caller thread with binary chunks. The view is
 // valid only during the callback; calling another blocking Sandbox API is rejected.
@@ -44,7 +35,7 @@ struct RuntimeCommand {
 };
 
 // Host/guest transport, artifact format and isolation belong to the backend.
-// A VM backend can import B into a disk image and use a guest agent for file/exec RPC.
+// A VM backend can import B into a disk image and use a guest agentd for file/exec RPC.
 class RuntimeBackend {
   public:
     virtual ~RuntimeBackend() = default;
@@ -55,20 +46,16 @@ class RuntimeBackend {
     // Return only after startup and resource policy enforcement are verified.
     virtual void start(SandboxInfo &info) = 0;
     virtual auto status(const SandboxInfo &info) -> RuntimeStatus = 0;
-    virtual auto execute(const SandboxInfo &info, const RuntimeCommand &command) -> Result = 0;
+    virtual auto execute(const RuntimeCommand &command) -> Result = 0;
     // May be invoked concurrently with execute; false means no active task.
-    virtual auto cancel() -> bool { return false; }
-    
-    virtual auto read(
-        const SandboxInfo &info, 
-        const std::filesystem::path &path, 
-        size_t limit) -> Result = 0;
+    virtual auto cancel() -> bool {
+        return false;
+    }
 
-    virtual auto write(
-        const SandboxInfo &info, 
-        const std::filesystem::path &path, 
-        std::string_view content) -> Result = 0;
-        
+    virtual auto read(const std::filesystem::path &path, size_t limit) -> Result = 0;
+
+    virtual auto write(const std::filesystem::path &path, std::string_view content) -> Result = 0;
+
     virtual void pause(const SandboxInfo &info) = 0;
     virtual void resume(const SandboxInfo &info) = 0;
     // Called with writers quiesced. Export guest changes to B before host-side inspection.

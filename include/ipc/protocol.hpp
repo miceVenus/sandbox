@@ -6,10 +6,10 @@
 #include <string>
 #include <string_view>
 
-namespace protocol {
+namespace ipc {
     using Json = nlohmann::json;
     inline constexpr uint32_t protocol_version = 1;
-    inline constexpr const char *protocol_name = "bbm.sandbox.agent";
+    inline constexpr const char *protocol_name = "bbm.sandbox.agentd";
     inline constexpr size_t max_frame_bytes = 64 * 1024;
     inline constexpr size_t chunk_bytes = 16 * 1024;
 
@@ -42,4 +42,4 @@ namespace protocol {
     auto unsigned_field(const Json &value, const char *key, uint64_t maximum) -> uint64_t;
     auto text_field(const Json &value, const char *key, size_t maximum = 4096) -> std::string;
     void require(bool condition, const std::string &message);
-} // namespace protocol
+} // namespace ipc

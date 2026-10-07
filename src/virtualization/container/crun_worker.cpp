@@ -1,15 +1,15 @@
-#include "virtualization/container/crun_worker_protocol.hpp"
+#include "virtualization/container/crun_request.hpp"
 
 #include <cerrno>
 #include <cstdint>
-#include <vector>
 #include <cstdlib>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
-#include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
     using nlohmann::json;
@@ -18,11 +18,13 @@ namespace {
         // Consume and close control before libcrun touches descriptors or starts
         // a task. Task stdin, including binary file contents, stays independent.
         struct ControlFd {
-            ~ControlFd() { close(crun_worker::control_fd); }
+            ~ControlFd() {
+                close(crun_worker::control_fd);
+            }
         } control;
         struct stat st{};
-        if (fstat(crun_worker::control_fd, &st) < 0 || !S_ISREG(st.st_mode) ||
-            st.st_size <= 0 || static_cast<std::size_t>(st.st_size) > crun_worker::max_request_bytes) {
+        if (fstat(crun_worker::control_fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+            static_cast<std::size_t>(st.st_size) > crun_worker::max_request_bytes) {
             throw std::runtime_error("invalid libcrun control descriptor or request size");
         }
         std::vector<std::uint8_t> bytes(static_cast<std::size_t>(st.st_size));
@@ -41,7 +43,8 @@ namespace {
         return json::from_cbor(bytes);
     }
 
-    std::string checked_string(const json &message, const char *name, bool absolute = false) {
+    auto checked_string(const json &message, const char *name, bool absolute = false)
+        -> std::string {
         auto value = message.at(name).get<std::string>();
         if (value.find('\0') != std::string::npos ||
             (absolute && (value.empty() || value.front() != '/'))) {
@@ -84,14 +87,14 @@ auto main(int argc, char **argv) -> int {
             throw std::runtime_error("invalid libcrun container ID");
         }
         const auto bundle = checked_string(message, "bundle", operation == SANDBOX_CRUN_START);
-        const bool has_listener = message.at("agent_listener").get<bool>();
+        const bool has_listener = message.at("agentd_listener").get<bool>();
         if (has_listener) {
             int accepting = 0;
             socklen_t size = sizeof(accepting);
             if (operation != SANDBOX_CRUN_START ||
                 getsockopt(4, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &size) < 0 || !accepting ||
                 dup2(4, 3) < 0) {
-                throw std::runtime_error("invalid container agent listener");
+                throw std::runtime_error("invalid container agentd listener");
             }
             close(4);
         }
@@ -100,7 +103,11 @@ auto main(int argc, char **argv) -> int {
             configure_host_environment(message);
         }
         const sandbox_crun_request request{static_cast<sandbox_crun_operation>(operation),
-                                           root.c_str(), id.c_str(), bundle.c_str(), systemd, has_listener ? 1 : 0};
+                                           root.c_str(),
+                                           id.c_str(),
+                                           bundle.c_str(),
+                                           systemd,
+                                           has_listener ? 1 : 0};
         return sandbox_libcrun_dispatch(&request, argc, argv);
     } catch (const std::exception &error) {
         std::cerr << "libcrun worker: " << error.what() << '\n';

@@ -6,18 +6,12 @@
 #include <optional>
 #include <vector>
 
-enum class MergePolicy : uint8_t{ 
-    ReviewOnly, 
-    AutoFastForward 
-};
+enum class MergePolicy : uint8_t { ReviewOnly, AutoFastForward };
 
 // Minimal copies a small runtime. HostTools imports selected host tool directories read-only.
-enum class Environment : uint8_t{ 
-    Minimal, 
-    HostTools 
-};
+enum class Environment : uint8_t { Minimal, HostTools };
 
-enum class SandboxState : uint8_t{
+enum class SandboxState : uint8_t {
     Preparing,
     Active,
     Frozen,

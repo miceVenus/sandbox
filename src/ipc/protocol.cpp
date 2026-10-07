@@ -2,7 +2,7 @@
 
 #include <set>
 
-namespace protocol {
+namespace ipc {
     namespace {
         void append_u32(std::string &output, uint32_t value) {
             for (int shift = 24; shift >= 0; shift -= 8) {
@@ -132,11 +132,7 @@ namespace protocol {
         }
     }
 
-    auto unsigned_field(
-        const Json &value, 
-        const char *key, 
-        uint64_t maximum) -> uint64_t 
-    {
+    auto unsigned_field(const Json &value, const char *key, uint64_t maximum) -> uint64_t {
         require(value.is_object() && value.contains(key) && value.at(key).is_number_unsigned(),
                 std::string("expected unsigned field: ") + key);
         const auto result = value.at(key).get<uint64_t>();
@@ -144,11 +140,7 @@ namespace protocol {
         return result;
     }
 
-    auto text_field(
-        const Json &value, 
-        const char *key, 
-        size_t maximum) -> std::string 
-    {
+    auto text_field(const Json &value, const char *key, size_t maximum) -> std::string {
         require(value.is_object() && value.contains(key) && value.at(key).is_string(),
                 std::string("expected text field: ") + key);
         const auto result = value.at(key).get<std::string>();
@@ -204,4 +196,4 @@ namespace protocol {
         require(payload.is_object(), "payload must be a map");
         return {read_u32(frame, 4), static_cast<Flag>(flag), type, std::move(payload)};
     }
-} // namespace protocol
+} // namespace ipc

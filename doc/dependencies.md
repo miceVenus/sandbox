@@ -108,13 +108,13 @@ cmake --preset test
 cmake --build --preset test
 
 # 先检查基础组件
-ctest --preset test -R '^(process-supervisor|git-workspace|sandbox-lifecycle|runtime-backend|agent-protocol|guest-service)$'
+ctest --preset test -R '^(process-supervisor|git-workspace|sandbox-lifecycle|runtime-backend|agentd-protocol|agentd-service)$'
 
 # 普通用户下启动 OCI 容器，包含输出回调、取消和文件边界检查
-ctest --preset test -R '^manager-crun'
+ctest --preset test -R '^container-crun'
 
 # /dev/kvm 可访问，且用户 cgroup 已委派后启动真实 VM
-ctest --preset test -R '^manager-krun'
+ctest --preset test -R '^microvm-krun'
 
 # 重新编译/安装 SDK，并验证独立应用和资源移动
 ctest --preset test -R '^sdk-install$'

@@ -13,16 +13,19 @@ install(TARGETS sandbox_core EXPORT bbm-sandbox-targets
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 # Preserve the public include tree after the source layout refactor. Backend
 # workers, bootstrap policies and their dependency headers remain private.
-install(FILES include/sandbox.hpp include/sandbox_types.hpp include/agent_client.hpp
+install(FILES include/sandbox.hpp include/sandbox_types.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox)
-install(FILES include/virtualization/runtime.hpp include/virtualization/process.hpp
+install(FILES include/virtualization/runtime.hpp include/virtualization/agentd_client.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/virtualization)
-install(FILES include/virtualization/microvm/libkrun_runtime.hpp
+install(FILES include/virtualization/microvm/krun_runtime.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/virtualization/microvm)
-install(FILES include/workspace/workspace.hpp include/workspace/workspace_backend.hpp
+install(FILES include/workspace/workspace.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/workspace)
-install(FILES include/ipc/agent_transport.hpp include/ipc/agent_protocol.hpp
+install(FILES include/ipc/transport.hpp include/ipc/protocol.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/ipc)
+install(DIRECTORY include/lib/
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/lib
+  FILES_MATCHING PATTERN "*.hpp")
 install(EXPORT bbm-sandbox-targets NAMESPACE bbm::
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bbm-sandbox)
 configure_package_config_file(cmake/bbm-sandbox-config.cmake.in

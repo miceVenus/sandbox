@@ -23,3 +23,8 @@ TODO.md
 doc/*
 !doc/dependencies.md
 !doc/communication.md
+
+# Keep the canonical organization and formatting rules in source control.
+!/.clang-format
+!doc/code_organization.md
+!doc/agentd_protocol.md

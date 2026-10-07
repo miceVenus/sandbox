@@ -12,7 +12,8 @@ class WorkspaceFiles {
     ~WorkspaceFiles();
     WorkspaceFiles(const WorkspaceFiles &) = delete;
     auto operator=(const WorkspaceFiles &) -> WorkspaceFiles & = delete;
-    [[nodiscard]] auto read(const std::filesystem::path &absolute_path, size_t limit) const -> std::string;
+    [[nodiscard]] auto read(const std::filesystem::path &absolute_path, size_t limit) const
+        -> std::string;
 
     class Write {
       public:
@@ -28,11 +29,12 @@ class WorkspaceFiles {
         explicit Write(std::unique_ptr<State> state);
         std::unique_ptr<State> state_;
     };
-    [[nodiscard]] auto begin_write(const std::filesystem::path &absolute_path,
-                                       size_t limit) const -> std::unique_ptr<Write>;
+    [[nodiscard]] auto begin_write(const std::filesystem::path &absolute_path, size_t limit) const
+        -> std::unique_ptr<Write>;
 
   private:
-    [[nodiscard]] auto relative_file(const std::filesystem::path &path) const -> std::filesystem::path;
+    [[nodiscard]] auto relative_file(const std::filesystem::path &path) const
+        -> std::filesystem::path;
     std::filesystem::path root_;
     int root_fd_;
 };

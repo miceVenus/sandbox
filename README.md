@@ -2,25 +2,27 @@
 
 这是一个面向 Linux 的 C++17 Agent 沙箱 SDK。它从干净的 Git 仓库创建独立任务工作区，在 OCI 容器中运行命令，并提供工作区文件读写和改动预览。工作区操作使用 libgit2 builtin API；容器和 VM 内共用常驻 agentd，libcrun 工作进程负责生命周期操作。
 
+概念与目录约定见 [代码组织](doc/code_organization.md)：Sandbox 表示虚拟化环境，Session 表示 SDK 与 agentd 的通信通道。生命周期由宿主机侧后端管理。
+
 当前实现适合本机开发、集成和学习容器隔离流程；它还不是可直接暴露给不可信用户的生产服务。
 
 ## 已实现功能
 
 - **沙箱管理：**创建、查询、执行、预览改动和停止沙箱。默认以普通用户和 rootless crun 运行。
-- **独立 Git 工作区：**每个沙箱得到自己的 `agent` 分支和 Git 元数据。Agent 可以在容器中使用 Git 并提交；源仓库不挂入容器，也不会被任务修改。
+- **独立 Git 工作区：**每个沙箱得到自己的 `sandbox` 分支和 Git 元数据。Agent 可以在容器中使用 Git 并提交；源仓库不挂入容器，也不会被任务修改。
 - **隔离的基线与预览：**管理器在容器外保留私有基线。状态和二进制补丁都相对该基线生成，因此 Agent 在工作区内提交后，改动仍可预览。
-- **两种容器环境：**默认的 HostTools 模式以只读挂载复用本机工具链；Minimal 模式使用静态 BusyBox、Git 和文件助手构建较小的环境。
+- **两种容器环境：**默认的 HostTools 模式以只读挂载复用本机工具链；Minimal 模式使用静态 BusyBox、Git 和 agentd构建较小的环境。
 - **受监督的命令执行：**参数数组直接传给进程，不经 shell 拼接；分别捕获 stdout/stderr，并处理超时、输出上限及二进制 stdin。
 - **受限的文件 API：**SDK 可在工作区内读写二进制文件；路径边界、符号链接、特殊文件和文件大小均受检查，写入采用同目录临时文件和原子替换。
 - **C++ SDK：**构建树和安装包均提供 `sandbox_core`；安装包导出 CMake target `bbm::sandbox_core`。
-- **可替换运行时：**`Sandbox` 通过 `RuntimeBackend` 选择 OCI 容器或 VM，工作区直接使用 `GitWorkspace`。运行时负责环境准备、隔离和任务通信，预览前先冻结写入者并同步工作区。
+- **可替换运行时：**`Sandbox` 通过 `RuntimeBackend` 选择 OCI 容器或 VM，工作区直接使用 `Workspace`。运行时负责环境准备、隔离和任务通信，预览前先冻结写入者并同步工作区。
 
 ## 工作流程
 
 ```mermaid
 flowchart LR
     A["干净的源 Git 仓库"] --> M["沙箱管理器：记录基线"]
-    M --> B["独立 B 工作区：agent 分支"]
+    M --> B["独立 B 工作区：sandbox 分支"]
     B --> C["OCI bundle：只挂载 B"]
     C --> R["crun 容器"]
     R --> X["命令、文件读写"]
@@ -30,7 +32,7 @@ flowchart LR
 
 源仓库必须是已提交且干净的 Git 工作树，暂不支持 submodule。B 工作区从选定提交创建，包含该提交可达的历史；其他分支、未提交内容、未跟踪文件和忽略文件不会复制进去。沙箱目录必须新建在源仓库之外，且其父目录已存在。
 
-`GitWorkspace` 可单独创建和检查 B 工作区，不启动容器。
+`Workspace` 可单独创建和检查 B 工作区，不启动容器。
 
 ## 环境与隔离
 
@@ -202,29 +204,29 @@ read/write 拒绝工作区外路径、`..`、符号链接与特殊文件；write
 旧记录缺少运行时字段时按 `oci-crun` 处理；运行时不匹配的记录会被拒绝打开。
 工作区固定使用 Git，新记录不再包含 `workspace_backend`；旧记录中的 `git` 标识仍可读取。
 
-独立工作区 API `GitWorkspace::create/open/status/diff` 也予以保留。
-`files/` 是任务可写的 B，`manager.git/` 和 `session.txt` 是容器外的管理数据。
+独立工作区 API `Workspace::create/open/status/diff` 也予以保留。
+`files/` 是任务可写的 B，`manager.git/` 和 `workspace.txt` 是容器外的管理数据。
 补丁含已提交、未提交、新增、删除和二进制文件改动；忽略文件不导出，补丁输出上限为 1 MiB。
 
 ### 替换运行时后端
 
 ```cpp
-// 显式选择运行时，工作区始终由 GitWorkspace 管理。
-Sandbox sandbox(default_sandbox_root(), make_libcrun_backend());
+// 显式选择运行时，工作区始终由 Workspace 管理。
+Sandbox sandbox(default_sandbox_root(), make_crun_backend());
 
 // 之后的 VM 实现可通过同一构造函数注入：
 // Sandbox sandbox(root, make_your_vm_backend(trusted_config));
 ```
 
 `RuntimeBackend` 提供环境准备、启动、状态、执行、读写、暂停、恢复、同步工作区和停止接口。
-管理器在预览时执行 `pause → synchronize_workspace → GitWorkspace::status/diff → resume`。
+管理器在预览时执行 `pause → synchronize_workspace → Workspace::status/diff → resume`。
 当前 OCI 后端直接挂载 B，同步步骤无需拷贝；VM 后端须在这个步骤将 guest 结果导出到宿主机 B。
 `stop` 必须回收执行资源并保留可供检查的 B，文件边界与 guest 传输也由后端负责。
 详细契约和 libkrun 接入方向见 [后端设计](doc/backends.md)。默认运行时仍为 libcrun；可选 libkrun 后端已接入真实 KVM，见下方使用方法。
 
-已实现独立的 Host Agent 客户端、Guest 服务与自己的 CBOR 协议子集，支持执行、取消和分块文件读写。
+已实现独立的 AgentdClient、Guest 服务与自己的 CBOR 协议子集，支持执行、取消和分块文件读写。
 协议与传输分别封装，支持 socket 和专用 virtio 字符端口；用法、消息格式及限制见
-[Guest 协议](doc/agent-protocol.md)。libkrun 后端通过此组件接入 `Sandbox` 的 VM 生命周期。
+[Guest 协议](doc/agentd_protocol.md)。libkrun 后端通过此组件接入 `Sandbox` 的 VM 生命周期。
 
 ## 使用 libkrun VM 后端
 
@@ -242,9 +244,9 @@ SDK 显式选择后端：
 
 ```cpp
 #include <sandbox.hpp>
-#include <virtualization/microvm/libkrun_runtime.hpp>
+#include <virtualization/microvm/krun_runtime.hpp>
 
-Sandbox sandbox(default_sandbox_root(), make_libkrun_backend());
+Sandbox sandbox(default_sandbox_root(), make_krun_backend());
 Options options;
 options.src_repo = "/absolute/path/to/repository";
 options.ctr_repo = "/project";
@@ -261,7 +263,7 @@ sandbox.stop(); // 回收 VM，保留 B
 
 当前实现要求普通用户可访问 `/dev/kvm`、rootless namespace 和 systemd cgroup v2
 委派；不自动降级为 Host 执行或关闭资源限制。首次启动等待 ready 最长 30 秒，
-可通过可信 `LibkrunConfig` 调整 vCPU 数和启动期限。
+可通过可信 `KrunConfig` 调整 vCPU 数和启动期限。
 
 HostTools 通过限定的只读系统工具目录构建 Guest 视图；Minimal 使用静态 BusyBox 和
 必要程序，不要求手工维护镜像模板。Guest 根文件系统只读，B 和沙箱内 build/env/cache
@@ -288,8 +290,8 @@ no-new-privileges。Guest idmapped mount 将 B 的文件所有者映射给任务
 - `process-supervisor`：进程输出、退出状态、超时、输出限制和 stdin。
 - `git-workspace`：真实临时 Git 仓库、基线、文件增删改、二进制 diff 和源仓库保护。
 - `sandbox-lifecycle`：直接调用 SDK，使用 RuntimeBackend 测试替身验证沙箱 API、状态和错误策略。
-- `agent-protocol`：固定 wire 样本、畸形 CBOR、分片、超大帧、部分帧超时。
-- `guest-service`：启动真实 Guest 服务程序，验证执行/取消、二进制输入输出、文件边界、断线回收。
+- `agentd-protocol`：固定 wire 样本、畸形 CBOR、分片、超大帧、部分帧超时。
+- `agentd-service`：启动真实 Guest 服务程序，验证执行/取消、二进制输入输出、文件边界、断线回收。
 - `runtime-backend`：独立 guest 传输测试替身，验证无 OCI bundle/cgroup 假设、文件 API 委派、预览前同步、超时回收和后端身份检查。
 - `sandbox-crun` 与 `sandbox-crun-minimal`：rootless HostTools/Minimal 容器、隔离与资源限制。
 - `sandbox-krun-minimal` 与 `sandbox-krun-host-tools`：真实 KVM/vsock、任务身份、文件边界、后台子进程回收、同步预览、G++ 编译以及超时/输出超限回收。
@@ -322,7 +324,7 @@ Guest 只部署一个 `agentd`。Host 的 exec/read/write 请求通过私有 vso
 
 执行命令时，服务使用 `posix_spawn` 启动同一个只读 `agentd` 的内部 `--run-task -- COMMAND...` 模式。子进程先加入固定任务 cgroup，设置 rlimit、清除附加组、降至 UID/GID 65534 并禁止提权，然后 `execv` 用户命令。父进程持续处理协议、输出、取消与回收。
 
-`src/agent/task_runner.cpp` 保留任务准备函数，已无独立 main 或构建目标；不再部署 `sandbox-task`。非特权任务再次调用内部任务模式会被拒绝。这个模式不是 vsock RPC 操作，也不能由请求选择 cgroup 或服务权限。
+`src/agentd/task_runner.cpp` 保留任务准备函数，已无独立 main 或构建目标；不再部署 `sandbox-task`。非特权任务再次调用内部任务模式会被拒绝。这个模式不是 vsock RPC 操作，也不能由请求选择 cgroup 或服务权限。
 
 ## 单实例 Sandbox
 
@@ -331,13 +333,13 @@ Guest 只部署一个 `agentd`。Host 的 exec/read/write 请求通过私有 vso
 `SandboxInfo` 保存 ID、工作目录、运行时 ID、基线 commit 和配置，`SandboxState` 表示生命周期，`status()` 返回 `SandboxStatus`。`read/write/execute/get_changes/stop/destroy` 都不传 ID。
 
 ```cpp
-Sandbox sandbox(default_sandbox_root(), make_libkrun_backend());
+Sandbox sandbox(default_sandbox_root(), make_krun_backend());
 auto info = sandbox.create(options);
 sandbox.write("/workspace/main.cpp", contents);
 auto result = sandbox.execute({"/usr/bin/g++", "/workspace/main.cpp", "-o", "/build/app"});
 sandbox.stop(); // 保留 B 和元数据，支持之后重新打开
 
-Sandbox restored(default_sandbox_root(), make_libkrun_backend());
+Sandbox restored(default_sandbox_root(), make_krun_backend());
 restored.open(info.id);
 auto changes = restored.get_changes();
 restored.destroy(); // 删除 B，重复调用安全

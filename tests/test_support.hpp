@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../include/virtualization/process.hpp"
+#include "lib/process.hpp"
+#include "lib/string.hpp"
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -52,18 +53,11 @@ namespace test {
         return {(std::istreambuf_iterator<char>(in)), {}};
     }
 
-    inline std::string trim(std::string value) {
-        while (!value.empty() && (value.back() == '\n' || value.back() == '\r')) {
-            value.pop_back();
-        }
-        return value;
-    }
-
     // Git CLI belongs to the test fixture and the simulated Agent, not the SDK backend.
-    inline std::string
-    git(const fs::path &repo, std::vector<std::string> arguments, std::string_view input = {}) {
+    inline std::string git(const fs::path &repo, std::vector<std::string> arguments,
+                           std::string_view input = {}) {
         arguments.insert(arguments.begin(), {"/usr/bin/git", "-C", repo.string()});
-        const auto result = run_process(arguments, 10000, 2 * 1024 * 1024, true, input);
+        const auto result = lib::run_process(arguments, 10000, 2 * 1024 * 1024, true, input);
         check(result.runtime_status == 0 && !result.timed_out && !result.output_limited,
               "fixture Git failed: " + result.err);
         return result.out;
@@ -71,14 +65,7 @@ namespace test {
 
     inline void commit(const fs::path &repo, const std::string &message) {
         git(repo, {"add", "."});
-        git(repo,
-            {"-c",
-             "user.name=Test",
-             "-c",
-             "user.email=test@example.invalid",
-             "commit",
-             "--allow-empty",
-             "-qm",
-             message});
+        git(repo, {"-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit",
+                   "--allow-empty", "-qm", message});
     }
 } // namespace test

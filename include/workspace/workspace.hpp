@@ -18,10 +18,10 @@ class Workspace {
                        const std::filesystem::path &sandbox_directory,
                        const std::string &revision = "HEAD") -> Workspace;
 
-    static auto open(const std::filesystem::path &session_directory) -> Workspace;
+    static auto open(const std::filesystem::path &workspace_directory) -> Workspace;
 
     [[nodiscard]] auto files_path() const -> std::filesystem::path {
-        return session_ / "files";
+        return directory_ / "files";
     }
 
     [[nodiscard]] auto source_repository() const -> const std::filesystem::path & {
@@ -47,9 +47,10 @@ class Workspace {
     // Future: freeze and validate B's commits, then merge or export the result.
     // Define host concurrency rules before adding apply and discard APIs.
   private:
-    Workspace(std::filesystem::path session, std::filesystem::path source, std::string baseline);
+    Workspace(std::filesystem::path workspace_directory, std::filesystem::path source,
+              std::string baseline);
     void validate_files() const;
-    std::filesystem::path session_, source_;
+    std::filesystem::path directory_, source_;
     std::string baseline_, source_head_;
     std::optional<std::string> source_branch_;
 };

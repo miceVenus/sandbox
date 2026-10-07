@@ -8,19 +8,23 @@ function(sandbox_add_test_program name)
   set(SANDBOX_TEST_TARGETS ${SANDBOX_TEST_TARGETS} ${name}-test PARENT_SCOPE)
 endfunction()
 
-foreach(name IN ITEMS process workspace manager backend manager_crun agent_protocol guest_service)
+foreach(name IN ITEMS process workspace sandbox backend container agentd_protocol agentd_service session)
   sandbox_add_test_program(${name})
 endforeach()
+target_sources(session-test PRIVATE src/agentd/service.cpp)
+add_test(NAME agentd-session COMMAND session-test)
+set_tests_properties(agentd-session PROPERTIES TIMEOUT 20)
+
 add_test(NAME process-supervisor COMMAND process-test)
 add_test(NAME git-workspace COMMAND workspace-test)
-add_test(NAME sandbox-lifecycle COMMAND manager-test)
+add_test(NAME sandbox-lifecycle COMMAND sandbox-test)
 add_test(NAME runtime-backend COMMAND backend-test)
-add_test(NAME agent-protocol COMMAND agent_protocol-test)
-add_test(NAME guest-service COMMAND guest_service-test $<TARGET_FILE:agentd>)
-set_tests_properties(agent-protocol guest-service PROPERTIES TIMEOUT 30)
-add_test(NAME manager-crun COMMAND manager_crun-test host-tools)
-add_test(NAME manager-crun-minimal COMMAND manager_crun-test minimal)
-set_tests_properties(manager-crun manager-crun-minimal PROPERTIES TIMEOUT 60)
+add_test(NAME agentd-protocol COMMAND agentd_protocol-test)
+add_test(NAME agentd-service COMMAND agentd_service-test $<TARGET_FILE:agentd>)
+set_tests_properties(agentd-protocol agentd-service PROPERTIES TIMEOUT 30)
+add_test(NAME container-crun COMMAND container-test host-tools)
+add_test(NAME container-crun-minimal COMMAND container-test minimal)
+set_tests_properties(container-crun container-crun-minimal PROPERTIES TIMEOUT 60)
 
 add_test(NAME sdk-install COMMAND ${Python3_EXECUTABLE}
   ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sdk_install.py
@@ -29,10 +33,10 @@ add_test(NAME sdk-install COMMAND ${Python3_EXECUTABLE}
 set_tests_properties(sdk-install PROPERTIES TIMEOUT 240)
 
 if(SANDBOX_ENABLE_LIBKRUN)
-  sandbox_add_test_program(manager_krun)
-  add_test(NAME manager-krun-minimal COMMAND manager_krun-test minimal)
-  add_test(NAME manager-krun-host-tools COMMAND manager_krun-test host-tools)
-  set_tests_properties(manager-krun-minimal manager-krun-host-tools
+  sandbox_add_test_program(microvm)
+  add_test(NAME microvm-krun-minimal COMMAND microvm-test minimal)
+  add_test(NAME microvm-krun-host-tools COMMAND microvm-test host-tools)
+  set_tests_properties(microvm-krun-minimal microvm-krun-host-tools
     PROPERTIES TIMEOUT 90 RUN_SERIAL TRUE)
 endif()
 

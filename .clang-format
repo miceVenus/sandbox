@@ -1,0 +1,13 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+NamespaceIndentation: All
+ColumnLimit: 100
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: None
+PointerAlignment: Right
+DerivePointerAlignment: false
+SortIncludes: CaseSensitive

@@ -1,30 +1,25 @@
 #pragma once
 
-#include "protocol.hpp"
+#include "ipc/protocol.hpp"
+#include "lib/io.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 
-namespace protocol {
-    using Clock = std::chrono::steady_clock;
-    using Deadline = Clock::time_point;
-
-    struct TransportError : std::runtime_error {
-        using std::runtime_error::runtime_error;
-    };
-    struct Timeout : TransportError {
-        Timeout() : TransportError("agent transport deadline exceeded") {
-        }
-    };
+namespace ipc {
+    using Clock = lib::Clock;
+    using Deadline = lib::Deadline;
+    using TransportError = lib::IoError;
+    using Timeout = lib::IoTimeout;
 
     // One reader and one writer may operate concurrently. Implementations own their resource.
     class Transport {
       public:
         virtual ~Transport() = default;
         virtual void write_all(std::string_view bytes, Deadline deadline) = 0;
-        virtual std::string read_exact(size_t size, Deadline deadline) = 0;
+        virtual auto read_exact(size_t size, Deadline deadline) -> std::string = 0;
         virtual void interrupt() noexcept {
         }
     };
@@ -48,4 +43,4 @@ namespace protocol {
         std::mutex writer_;
         std::atomic<bool> valid_{true};
     };
-} // namespace protocol
+} // namespace ipc

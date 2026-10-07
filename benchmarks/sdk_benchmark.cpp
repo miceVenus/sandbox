@@ -1,6 +1,6 @@
-#include "../include/sandbox.hpp"
-#include "../include/virtualization/container/crun_worker_client.hpp"
-#include "../include/virtualization/microvm/libkrun_runtime.hpp"
+#include "sandbox.hpp"
+#include "virtualization/container_client.hpp"
+#include "virtualization/microvm/krun_runtime.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -16,24 +16,25 @@ namespace fs = std::filesystem;
 using json = nlohmann::json;
 using Clock = std::chrono::steady_clock;
 
-static double elapsed(Clock::time_point begin) {
+static auto elapsed(Clock::time_point begin) -> double {
     return std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
 }
-static std::string read_text(const fs::path &path) {
+static auto read_text(const fs::path &path) -> std::string {
     std::ifstream in(path);
     if (!in) {
         throw std::runtime_error("cannot read " + path.string());
     }
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
-static uint64_t read_number(const fs::path &path) {
+static auto read_number(const fs::path &path) -> uint64_t {
     return std::stoull(read_text(path));
 }
 static json disk_usage(const fs::path &path) {
     uint64_t logical = 0, allocated = 0, entries = 0;
     auto add = [&](const fs::path &entry) {
         struct stat st{};
-        if (lstat(entry.c_str(), &st) != 0) throw std::runtime_error("lstat failed: " + entry.string());
+        if (lstat(entry.c_str(), &st) != 0)
+            throw std::runtime_error("lstat failed: " + entry.string());
         logical += st.st_size;
         allocated += uint64_t(st.st_blocks) * 512;
         ++entries;
@@ -41,13 +42,14 @@ static json disk_usage(const fs::path &path) {
     if (fs::exists(path)) {
         add(path);
         // No symlink traversal. HostTools bind mounts live in the VMM namespace.
-        for (const auto &entry : fs::recursive_directory_iterator(path)) add(entry.path());
+        for (const auto &entry : fs::recursive_directory_iterator(path))
+            add(entry.path());
     }
     return {{"logical_bytes", logical}, {"allocated_bytes", allocated}, {"entries", entries}};
 }
 static json sandbox_disk(const SandboxInfo &s) {
     json result{{"total", disk_usage(s.directory)}};
-    for (const auto *part : {"guest", "vmm", "workspace", "runtime-data", "vm-control"}) {
+    for (const auto *part : {"guest", "vmm", "workspace", "runtime-data", "control"}) {
         result[part] = disk_usage(s.directory / part);
     }
     return result;
@@ -56,11 +58,17 @@ static json sandbox_disk(const SandboxInfo &s) {
 // Timing decorators keep measurement code outside the production backend.
 class MeasuredRuntime : public RuntimeBackend {
   public:
-    std::unique_ptr<RuntimeBackend> inner = make_libkrun_backend();
+    std::unique_ptr<RuntimeBackend> inner = make_krun_backend();
     double prepare_ms = 0, start_ms = 0;
-    std::string id() const override { return inner->id(); }
-    void configure_state_directory(const fs::path &p) override { inner->configure_state_directory(p); }
-    void validate_options(const Options &o) override { inner->validate_options(o); }
+    auto id() const -> std::string override {
+        return inner->id();
+    }
+    void configure_state_directory(const fs::path &p) override {
+        inner->configure_state_directory(p);
+    }
+    void validate_options(const Options &o) override {
+        inner->validate_options(o);
+    }
     void prepare(SandboxInfo &s) override {
         const auto begin = Clock::now();
         inner->prepare(s);
@@ -71,20 +79,37 @@ class MeasuredRuntime : public RuntimeBackend {
         inner->start(s);
         start_ms = elapsed(begin);
     }
-    RuntimeStatus status(const SandboxInfo &s) override { return inner->status(s); }
-    Result execute(const SandboxInfo &s, const RuntimeCommand &c) override { return inner->execute(s, c); }
-    Result read(const SandboxInfo &s, const fs::path &p, size_t n) override { return inner->read(s, p, n); }
-    Result write(const SandboxInfo &s, const fs::path &p, std::string_view v) override { return inner->write(s, p, v); }
-    void pause(const SandboxInfo &s) override { inner->pause(s); }
-    void resume(const SandboxInfo &s) override { inner->resume(s); }
-    void synchronize_workspace(const SandboxInfo &s) override { inner->synchronize_workspace(s); }
-    void stop(const SandboxInfo &s) override { inner->stop(s); }
+    auto status(const SandboxInfo &s) -> RuntimeStatus override {
+        return inner->status(s);
+    }
+    auto execute(const RuntimeCommand &command) -> Result override {
+        return inner->execute(command);
+    }
+    auto read(const fs::path &path, size_t limit) -> Result override {
+        return inner->read(path, limit);
+    }
+    auto write(const fs::path &path, std::string_view contents) -> Result override {
+        return inner->write(path, contents);
+    }
+    void pause(const SandboxInfo &s) override {
+        inner->pause(s);
+    }
+    void resume(const SandboxInfo &s) override {
+        inner->resume(s);
+    }
+    void synchronize_workspace(const SandboxInfo &s) override {
+        inner->synchronize_workspace(s);
+    }
+    void stop(const SandboxInfo &s) override {
+        inner->stop(s);
+    }
 };
-static fs::path cgroup_of(int pid) {
+static auto cgroup_of(int pid) -> fs::path {
     std::istringstream in(read_text(fs::path("/proc") / std::to_string(pid) / "cgroup"));
     std::string line;
     while (std::getline(in, line)) {
-        if (line.rfind("0::/", 0) == 0) return fs::path("/sys/fs/cgroup") / line.substr(4);
+        if (line.rfind("0::/", 0) == 0)
+            return fs::path("/sys/fs/cgroup") / line.substr(4);
     }
     throw std::runtime_error("VMM cgroup v2 missing");
 }
@@ -97,18 +122,23 @@ static json memory_snapshot(int pid, const fs::path &cgroup) {
     std::string key;
     uint64_t bytes;
     while (stat >> key >> bytes) {
-        if (key == "anon" || key == "file" || key == "kernel") result["cgroup_" + key + "_bytes"] = bytes;
+        if (key == "anon" || key == "file" || key == "kernel")
+            result["cgroup_" + key + "_bytes"] = bytes;
     }
     const auto proc = fs::path("/proc") / std::to_string(pid);
     // ptrace permissions may prohibit smaps_rollup for the rootless namespace's VMM.
     for (const auto *file : {"status", "smaps_rollup"}) {
         std::ifstream in(proc / file);
-        if (!in) { result[std::string(file) + "_available"] = false; continue; }
+        if (!in) {
+            result[std::string(file) + "_available"] = false;
+            continue;
+        }
         result[std::string(file) + "_available"] = true;
         std::string line;
         while (std::getline(in, line)) {
             std::istringstream fields(line);
-            if (!(fields >> key >> bytes)) continue;
+            if (!(fields >> key >> bytes))
+                continue;
             if (key == "Rss:" || key == "Pss:" || key == "Private_Clean:" ||
                 key == "Private_Dirty:" || key == "VmRSS:" || key == "VmHWM:" || key == "VmSize:") {
                 result[key.substr(0, key.size() - 1) + "_bytes"] = bytes * 1024;
@@ -132,13 +162,19 @@ class MemorySampler {
             }
         });
     }
-    ~MemorySampler() { finish(); }
+    ~MemorySampler() {
+        finish();
+    }
     json finish() {
         done_ = true;
-        if (worker_.joinable()) worker_.join();
-        return {{"sampled_cgroup_peak_bytes", peak_.load()}, {"samples", samples_.load()},
-                {"read_errors", errors_.load()}, {"interval_ms", 10}};
+        if (worker_.joinable())
+            worker_.join();
+        return {{"sampled_cgroup_peak_bytes", peak_.load()},
+                {"samples", samples_.load()},
+                {"read_errors", errors_.load()},
+                {"interval_ms", 10}};
     }
+
   private:
     fs::path cgroup_;
     std::atomic<bool> done_{false};
@@ -146,17 +182,21 @@ class MemorySampler {
     std::thread worker_;
 };
 static json result_json(const Result &r) {
-    return {{"exit_status", r.runtime_status}, {"timed_out", r.timed_out},
-            {"output_limited", r.output_limited}, {"stdout", r.out}, {"stderr", r.err}};
+    return {{"exit_status", r.runtime_status},
+            {"timed_out", r.timed_out},
+            {"output_limited", r.output_limited},
+            {"stdout", r.out},
+            {"stderr", r.err}};
 }
 static void require_success(const Result &r) {
     if (r.runtime_status != 0 || r.timed_out || r.output_limited)
         throw std::runtime_error("Guest command failed: " + r.err);
 }
 
-int main(int argc, char **argv) {
+auto main(int argc, char **argv) -> int {
     if (argc != 7) {
-        std::cerr << "usage: sandbox-benchmark SOURCE ROOT minimal|host-tools HOST_MIB RUNS OUTPUT.json\n";
+        std::cerr << "usage: sandbox-benchmark SOURCE ROOT minimal|host-tools HOST_MIB RUNS "
+                     "OUTPUT.json\n";
         return 2;
     }
     std::string active_id;
@@ -164,21 +204,29 @@ int main(int argc, char **argv) {
     try {
         const fs::path source = fs::canonical(argv[1]), root = argv[2];
         const std::string mode = argv[3];
-        if (mode != "minimal" && mode != "host-tools") throw std::runtime_error("invalid mode");
+        if (mode != "minimal" && mode != "host-tools")
+            throw std::runtime_error("invalid mode");
         const unsigned budget = std::stoul(argv[4]), count = std::stoul(argv[5]);
-        if (count < 2 || count > 1000) throw std::runtime_error("RUNS must be 2..1000");
+        if (count < 2 || count > 1000)
+            throw std::runtime_error("RUNS must be 2..1000");
         Options options;
         options.src_repo = source;
         options.environment = mode == "minimal" ? Environment::Minimal : Environment::HostTools;
         options.memory_bytes = size_t(budget) * 1024 * 1024;
         options.cpu_quota_us = 0;
         options.cmd_timeout = std::chrono::seconds(30);
-        json report{{"mode", mode}, {"host_budget_mib", budget}, {"guest_ram_mib", budget / 2},
-                    {"vcpus", 1}, {"cpu_quota_us", 0}, {"idle_settle_ms", 1000},
-                    {"source_disk", disk_usage(source)}, {"runs", json::array()}};
-        CrunWorkerClient guard(root / "runtime", true);
+        json report{{"mode", mode},
+                    {"host_budget_mib", budget},
+                    {"guest_ram_mib", budget / 2},
+                    {"vcpus", 1},
+                    {"cpu_quota_us", 0},
+                    {"idle_settle_ms", 1000},
+                    {"source_disk", disk_usage(source)},
+                    {"runs", json::array()}};
+        ContainerClient guard(root / "runtime", true);
         for (unsigned index = 0; index < count; ++index) {
-            std::cerr << mode << " " << budget << " MiB sample " << index + 1 << "/" << count << "\n";
+            std::cerr << mode << " " << budget << " MiB sample " << index + 1 << "/" << count
+                      << "\n";
             auto runtime = std::make_unique<MeasuredRuntime>();
             auto *rt = runtime.get();
             manager = std::make_unique<Sandbox>(root, std::move(runtime));
@@ -186,11 +234,14 @@ int main(int argc, char **argv) {
             const auto s = manager->create(options);
             const double create_ms = elapsed(begin);
             active_id = s.id;
-            json run{{"index", index}, {"sandbox_id", s.id}, {"create_ms", create_ms},
+            json run{{"index", index},
+                     {"sandbox_id", s.id},
+                     {"create_ms", create_ms},
                      // Includes Git snapshot creation, validation and metadata writes.
                      {"sdk_overhead_ms", std::max(0.0, create_ms - rt->prepare_ms - rt->start_ms)},
                      {"prepare_ms", rt->prepare_ms},
-                     {"runtime_start_ms", rt->start_ms}, {"resource_limits_verified", s.resource_limits_verified}};
+                     {"runtime_start_ms", rt->start_ms},
+                     {"resource_limits_verified", s.resource_limits_verified}};
             const auto state_result = guard.state(s.runtime_id);
             require_success(state_result);
             const int pid = json::parse(state_result.out).at("pid");
@@ -204,12 +255,12 @@ int main(int argc, char **argv) {
             run["true_exec_ms"] = json::array();
             for (unsigned n = 0; n < 6; ++n) {
                 begin = Clock::now();
-                const auto result = manager->execute( {"/bin/true"});
+                const auto result = manager->execute({"/bin/true"});
                 const auto ms = elapsed(begin);
                 require_success(result);
                 run["true_exec_ms"].push_back(ms);
             }
-            const auto meminfo = manager->execute( {"/bin/cat", "/proc/meminfo"});
+            const auto meminfo = manager->execute({"/bin/cat", "/proc/meminfo"});
             require_success(meminfo);
             run["guest_meminfo"] = meminfo.out;
             if (mode == "host-tools") {
@@ -221,10 +272,12 @@ int main(int argc, char **argv) {
                 run["compile_result"] = result_json(compilation);
                 run["compile_memory"] = sampler.finish();
                 // An OOM is recorded as an outcome rather than discarded as an outlier.
-                if (compilation.runtime_status == 0 && !compilation.timed_out && !compilation.output_limited) {
-                    const auto execution = manager->execute( {"/build/app"});
+                if (compilation.runtime_status == 0 && !compilation.timed_out &&
+                    !compilation.output_limited) {
+                    const auto execution = manager->execute({"/build/app"});
                     require_success(execution);
-                    if (execution.out != "49995000\n") throw std::runtime_error("unexpected workload result");
+                    if (execution.out != "49995000\n")
+                        throw std::runtime_error("unexpected workload result");
                     run["app_result"] = result_json(execution);
                 }
             }
@@ -242,23 +295,29 @@ int main(int argc, char **argv) {
             // Give systemd time to remove an empty scope; never remove cgroups ourselves.
             for (unsigned n = 0; n < 100 && fs::exists(cgroup); ++n)
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            run["cleanup"] = {{"sandbox_removed", !fs::exists(s.directory)},
-                              {"runtime_state_removed", !fs::exists(root / "runtime" / s.runtime_id)},
-                              {"cgroup_removed", !fs::exists(cgroup)}};
+            run["cleanup"] = {
+                {"sandbox_removed", !fs::exists(s.directory)},
+                {"runtime_state_removed", !fs::exists(root / "runtime" / s.runtime_id)},
+                {"cgroup_removed", !fs::exists(cgroup)}};
             for (const auto &value : run["cleanup"].items())
-                if (!value.value().get<bool>()) throw std::runtime_error("cleanup verification failed");
+                if (!value.value().get<bool>())
+                    throw std::runtime_error("cleanup verification failed");
             report["runs"].push_back(run);
             // Preserve every completed sample even if a later run fails.
             std::ofstream out(argv[6]);
             out << report.dump(2) << '\n';
-            if (!out) throw std::runtime_error("cannot write benchmark result");
+            if (!out)
+                throw std::runtime_error("cannot write benchmark result");
         }
         return 0;
     } catch (const std::exception &e) {
         std::cerr << "benchmark failed: " << e.what() << '\n';
         if (manager && !active_id.empty()) {
-            try { manager->destroy(); }
-            catch (const std::exception &cleanup) { std::cerr << "cleanup failed: " << cleanup.what() << '\n'; }
+            try {
+                manager->destroy();
+            } catch (const std::exception &cleanup) {
+                std::cerr << "cleanup failed: " << cleanup.what() << '\n';
+            }
         }
         return 1;
     }
