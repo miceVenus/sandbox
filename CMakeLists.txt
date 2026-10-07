@@ -31,6 +31,9 @@ add_custom_target(sandbox-sdk ALL
   DEPENDS sandbox_core ${SANDBOX_HELPER_TARGETS})
 set_target_properties(sandbox-sdk PROPERTIES FOLDER "SDK")
 
+# Examples are opt-in targets and do not change the standard SDK builds.
+add_subdirectory(examples EXCLUDE_FROM_ALL)
+
 if(BUILD_TESTING)
   enable_testing()
   include(SandboxTests)

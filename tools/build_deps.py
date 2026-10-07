@@ -187,10 +187,10 @@ def main():
         tools += ['cargo', 'rustc', 'clang', 'patchelf', 'bison', 'flex', 'patch', 'tar']
         llvm_config = os.environ.get('LLVM_CONFIG_PATH', 'llvm-config')
         if not shutil.which(llvm_config):
-            raise RuntimeError(f'Missing LLVM configuration tool: {llvm_config}; see doc/dependencies.md')
+            raise RuntimeError(f'Missing LLVM configuration tool: {llvm_config}; see README.md')
     missing = [tool for tool in tools if not shutil.which(tool)]
     if missing:
-        raise RuntimeError('Missing build tools: ' + ', '.join(missing) + '; see doc/dependencies.md')
+        raise RuntimeError('Missing build tools: ' + ', '.join(missing) + '; see README.md')
     run(['pkg-config', '--exists', 'libsystemd', 'libseccomp', 'libcap', 'json-c'])
     lock = json.loads((PROJECT / 'deps.lock.json').read_text())
     if lock['schema'] != 1:

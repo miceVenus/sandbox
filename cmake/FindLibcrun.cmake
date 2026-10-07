@@ -23,7 +23,7 @@ pkg_check_modules(CRUN_SUPPORT REQUIRED IMPORTED_TARGET libsystemd libseccomp li
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(Libcrun
   REQUIRED_VARS LIBCRUN_LIBRARY LIBCRUN_INCLUDE_DIR LIBCRUN_CONFIG_DIR LIBCRUN_OCISPEC_INCLUDE_DIR
-  REASON_FAILURE_MESSAGE "Run tools/build-deps.sh, or set LIBCRUN_ROOT to a complete development prefix. See doc/dependencies.md")
+  REASON_FAILURE_MESSAGE "Run tools/build-deps.sh, or set LIBCRUN_ROOT to a complete development prefix. See README.md")
 if(Libcrun_FOUND AND NOT TARGET Libcrun::Libcrun)
   add_library(Libcrun::Libcrun STATIC IMPORTED)
   set_target_properties(Libcrun::Libcrun PROPERTIES

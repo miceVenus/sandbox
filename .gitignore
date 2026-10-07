@@ -3,7 +3,6 @@ plan.md
 /build/
 /CMakeUserPresets.json
 
-doc/
 cmake/
 # Required build/package modules are source inputs.
 !cmake/
@@ -19,12 +18,6 @@ TODO.md
 !tools/build_deps.py
 
 !/.gitignore
-!doc/
-doc/*
-!doc/dependencies.md
-!doc/communication.md
 
-# Keep the canonical organization and formatting rules in source control.
+# Keep formatting rules in source control.
 !/.clang-format
-!doc/code_organization.md
-!doc/agentd_protocol.md
