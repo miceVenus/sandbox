@@ -17,7 +17,13 @@ struct Result {
 
 namespace lib {
 
-    struct ProcessSupervision {
+    struct ProcessOptions {
+        int timeout_ms = 10000;
+        size_t output_limit = 1024 * 1024;
+        // Container startup workers can exit while a detached process retains the pipes.
+        bool drain_until_eof = true;
+        // Borrowed until run_process returns; empty connects stdin to /dev/null.
+        std::string_view stdin_data;
         std::filesystem::path cwd;
         const std::atomic<bool> *cancel = nullptr;
         // Called with bounded output chunks; false denotes stdout, true denotes stderr.
@@ -31,9 +37,7 @@ namespace lib {
         std::vector<std::string> environment;
     };
 
-    auto run_process(const std::vector<std::string> &args, int timeout_ms,
-                     size_t output_limit = 1024 * 1024, bool drain_until_eof = true,
-                     std::string_view stdin_data = {}, const ProcessSupervision &supervision = {})
+    auto run_process(const std::vector<std::string> &args, const ProcessOptions &options = {})
         -> Result;
 
     void check_process_result(const Result &result);

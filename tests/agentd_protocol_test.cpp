@@ -1,4 +1,4 @@
-#include "ipc/transport.hpp"
+#include "ipc/session.hpp"
 #include "test_support.hpp"
 #include "virtualization/agentd_client.hpp"
 
@@ -11,23 +11,6 @@ using test::check;
 using test::rejects;
 
 namespace {
-    class ScriptedTransport final : public ipc::Transport {
-      public:
-        explicit ScriptedTransport(std::string input) : input_(std::move(input)) {
-        }
-        void write_all(std::string_view, ipc::Deadline) override {
-        }
-        auto read_exact(size_t size, ipc::Deadline) -> std::string override {
-            check(size <= input_.size(), "unexpected scripted read");
-            auto output = input_.substr(0, size);
-            input_.erase(0, size);
-            return output;
-        }
-
-      private:
-        std::string input_;
-    };
-
     ipc::Message ready() {
         const ipc::Limits limits;
         return {0,
@@ -112,7 +95,7 @@ auto main() -> int {
         int sockets[2];
         check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
               "socketpair failed");
-        ipc::Channel receiver(ipc::adopt_descriptor(sockets[0], ipc::DescriptorKind::Socket));
+        ipc::Session receiver{lib::UniqueFd(sockets[0])};
         auto writer = std::async(std::launch::async, [&] {
             // Deliberately fragment the header and body into single-byte writes.
             for (char byte : golden) {
@@ -131,17 +114,6 @@ auto main() -> int {
             receiver.receive(ipc::Clock::now() + std::chrono::seconds(1));
         });
         close(sockets[1]);
-        // The same framing works with character-device style read/write operations.
-        check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
-              "socketpair failed");
-        {
-            ipc::Channel sender(ipc::adopt_descriptor(sockets[0], ipc::DescriptorKind::SerialPort));
-            ipc::Channel recipient(
-                ipc::adopt_descriptor(sockets[1], ipc::DescriptorKind::SerialPort));
-            const auto until = ipc::Clock::now() + std::chrono::seconds(1);
-            sender.send(message, until);
-            check(recipient.receive(until).id == message.id, "character I/O adapter failed");
-        }
         // A compromised Guest must not bypass Host offset, data-type and ID checks.
         for (const auto &bad :
              {ipc::Message{1,
@@ -151,9 +123,12 @@ auto main() -> int {
               ipc::Message{
                   1, ipc::Flag::Event, "fs.read.data", {{"offset", size_t(0)}, {"data", "text"}}},
               ipc::Message{2, ipc::Flag::Terminal, "fs.read.done", {{"size", size_t(0)}}}}) {
-            auto script = ipc::encode(ready()) + ipc::encode(bad);
-            virtualization::AgentdClient client(
-                std::make_unique<ScriptedTransport>(std::move(script)));
+            check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
+                  "socketpair failed");
+            ipc::SocketStream peer{lib::UniqueFd(sockets[1])};
+            const auto script = ipc::encode(ready()) + ipc::encode(bad);
+            peer.write_all(script, ipc::Clock::now() + std::chrono::seconds(1));
+            virtualization::AgentdClient client{lib::UniqueFd(sockets[0])};
             client.handshake();
             rejects([&] {
                 client.read("/workspace/a", 100);
@@ -166,14 +141,37 @@ auto main() -> int {
 
         check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
               "socketpair failed");
-        ipc::Channel stalled(ipc::adopt_descriptor(sockets[0], ipc::DescriptorKind::Socket));
+        ipc::Session stalled{lib::UniqueFd(sockets[0])};
         check(send(sockets[1], golden.data(), 6, MSG_NOSIGNAL) == 6, "partial header write failed");
         const auto started = ipc::Clock::now();
         rejects([&] {
             stalled.receive(started + std::chrono::milliseconds(30));
         });
-        check(ipc::Clock::now() - started < std::chrono::seconds(1), "transport timeout blocked");
+        check(ipc::Clock::now() - started < std::chrono::seconds(1), "session timeout blocked");
         close(sockets[1]);
+
+        // A peer that stops reading must not trap a sender in a blocking syscall.
+        check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
+              "socketpair failed");
+        ipc::Session blocked_sender{lib::UniqueFd(sockets[0])};
+        lib::UniqueFd idle_peer(sockets[1]);
+        const int buffer_bytes = 4096;
+        check(setsockopt(sockets[0], SOL_SOCKET, SO_SNDBUF, &buffer_bytes,
+                         sizeof(buffer_bytes)) == 0,
+              "send buffer configuration failed");
+        const ipc::Message large{
+            1, ipc::Flag::Event, "test.data", {{"data", ipc::binary_bytes(std::string(32768, 'x'))}}};
+        const auto write_started = ipc::Clock::now();
+        check(rejects([&] {
+                  blocked_sender.send(large, write_started + std::chrono::milliseconds(30));
+              }).find("deadline exceeded") != std::string::npos,
+              "backpressure did not produce an I/O timeout");
+        check(ipc::Clock::now() - write_started < std::chrono::seconds(1),
+              "socket write timeout blocked");
+        check(rejects([&] {
+                  blocked_sender.send(message, ipc::Clock::now() + std::chrono::seconds(1));
+              }).find("unusable") != std::string::npos,
+              "partial write timeout did not invalidate the session");
         std::cout << "agentd protocol passed\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n';

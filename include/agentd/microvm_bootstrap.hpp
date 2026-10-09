@@ -2,5 +2,5 @@
 #include "agentd/service.hpp"
 
 namespace agentd {
-    void configure_microvm(AgentdConfig &config, const std::filesystem::path &settings);
-}
+    void configure_microvm(ServiceConfig &config, const std::filesystem::path &settings);
+} // namespace agentd

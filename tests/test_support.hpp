@@ -57,7 +57,10 @@ namespace test {
     inline std::string git(const fs::path &repo, std::vector<std::string> arguments,
                            std::string_view input = {}) {
         arguments.insert(arguments.begin(), {"/usr/bin/git", "-C", repo.string()});
-        const auto result = lib::run_process(arguments, 10000, 2 * 1024 * 1024, true, input);
+        lib::ProcessOptions options;
+        options.output_limit = 2 * 1024 * 1024;
+        options.stdin_data = input;
+        const auto result = lib::run_process(arguments, options);
         check(result.runtime_status == 0 && !result.timed_out && !result.output_limited,
               "fixture Git failed: " + result.err);
         return result.out;

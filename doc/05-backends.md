@@ -1,6 +1,6 @@
 # crun 与 krun 后端
 
-Sandbox 通过 RuntimeBackend 调用环境准备、启动、状态、执行、文件读写、暂停、同步、恢复和停止。工作区由 Workspace 管理，任务协议由 Session 复用。
+Sandbox 通过 RuntimeBackend 调用环境准备、启动、状态、执行、文件读写、暂停、同步、恢复和停止。工作区由 Workspace 管理，任务协议由 AgentdClient 和 agentd Service 实现，两端共用 ipc::Session 收发消息。
 
 ## 隔离方式
 
@@ -30,6 +30,8 @@ agentd 作为 PID 1 接收请求，创建命令子进程并回收残留任务。
 宿主先创建 rootless OCI 保护容器，再在其中运行独立 `sandbox-krun` 进程。VMM 只能看到 Guest root、B、runtime-data、control 和 `/dev/kvm` 等配置资源。外层 namespace/cgroup 负责约束 VMM 自身。
 
 libkrun 配置 vCPU、RAM、virtiofs、vsock 和 Guest 启动程序；内核由匹配的 libkrunfw 提供。Guest agentd 挂载共享目录、建立任务 cgroup，再以 UID/GID 65534、空有效 capabilities 和 noNewPrivileges 启动命令。idmapped mount 将共享文件所有权映射给任务，宿主 B 仍归调用用户。
+
+任务环境变量由 environment 模块的 `make_config()` 统一生成。容器的 OCI `process.env` 和 agentd 配置共用这份变量；MicroVM 直接将变量写入 Guest 配置，bootstrap 交给 Service，再由 `run_process` 传入子进程。task_runner 只负责加入任务 cgroup、设置限制和降权；Minimal 与 HostTools 分别使用对应的 HOME、PATH 和缓存目录配置。
 
 内存总预算至少 256 MiB，一半用于 Guest RAM，另一半预留 VMM 和共享缓存。Host pids 限额为 `max(128, max_tasks)`，Guest pids 限额为 max_tasks。Guest 每条命令完成后使用 cgroup.kill 回收任务及脱离进程组的子进程。
 

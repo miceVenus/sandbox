@@ -42,10 +42,10 @@ libgit2 在 SDK 内提供对象、树、index 和 diff API，避免 Git 子进�
 
 ## 文件边界与交付
 
-预览检查文件类型，拒绝特殊文件、硬链接和嵌套 `.git`；顶层 B `.git` 不遍历。符号链接可作为 Git 文件记录，但文件 API 不跟随它们。
+预览检查文件类型，拒绝特殊文件、硬链接和嵌套 `.git`；顶层 B `.git` 不遍历。符号链接可作为 Git 文件记录，但文件 API 不跟随它们。文件 API 由隔离环境内的 `agentd::WorkspaceFiles` 实现，Service 通过 IPC 请求调用它；宿主 Workspace 负责 Git 仓库和改动预览。
 
 源仓库当前只读用于创建。结果交付尚未实现：下一步需要冻结最终快照、固定受控提交、处理 A 的并发变化和合并冲突。普通目录来源及快照导出也列入 [TODO](07-todo.md)。
 
 独立接口为 `Workspace::create/open/status/diff`，以及路径、基线和来源访问器。`source_head/source_branch` 在 create 返回对象中填充，Workspace::open 当前只恢复来源路径和基线；Sandbox 的源 HEAD、分支由 sandbox.json 恢复。
 
-实现：[workspace.cpp](../src/workspace/workspace.cpp)、[git_ops.cpp](../src/workspace/git_ops.cpp)、[workspace_files.cpp](../src/workspace/workspace_files.cpp)。
+实现：[workspace.cpp](../src/workspace/workspace.cpp)、[git_ops.cpp](../src/workspace/git_ops.cpp)、[workspace_files.cpp](../src/agentd/workspace_files.cpp)。

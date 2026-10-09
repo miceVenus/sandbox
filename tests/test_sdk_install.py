@@ -41,11 +41,16 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
     assert not (prefix / 'include/bbm-sandbox/client.hpp').exists()
     assert not (prefix / 'include/bbm-sandbox/crun_worker_client.hpp').exists()
     assert not (prefix / 'include/bbm-sandbox/virtualization/container/container_client.hpp').exists()
-    for header in ['virtualization/container_client.hpp', 'virtualization/session.hpp',
+    for header in ['virtualization/container_client.hpp',
                    'agentd/service.hpp', 'virtualization/container/crun_ops.h']:
         assert not (prefix / 'include/bbm-sandbox' / header).exists()
     assert not (prefix / 'include/bbm-sandbox/workspace/workspace_backend.hpp').exists()
     assert (prefix / 'include/bbm-sandbox/workspace/workspace.hpp').is_file()
+    assert (prefix / 'include/bbm-sandbox/ipc/session.hpp').is_file()
+    assert not (prefix / 'include/bbm-sandbox/virtualization/session.hpp').exists()
+    assert not (prefix / 'include/bbm-sandbox/ipc/transport.hpp').exists()
+    assert not (prefix / 'include/bbm-sandbox/lib/io.hpp').exists()
+    assert not (prefix / 'include/bbm-sandbox/lib/socket.hpp').exists()
     helper = prefix / 'libexec/bbm-sandbox/agentd'
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-io').exists()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-git').exists()
@@ -53,7 +58,8 @@ with tempfile.TemporaryDirectory(prefix='sandbox-sdk-install-') as temporary:
     runner = prefix / 'libexec/bbm-sandbox/sandbox-crun'
     assert runner.is_file()
     assert (prefix / 'libexec/bbm-sandbox/agentd').is_file()
-    for header in ['virtualization/agentd_client.hpp', 'ipc/transport.hpp', 'ipc/protocol.hpp']:
+    for header in ['virtualization/agentd_client.hpp', 'ipc/session.hpp', 'ipc/protocol.hpp',
+                   'ipc/io.hpp', 'ipc/socket.hpp']:
         assert (prefix / 'include/bbm-sandbox' / header).is_file()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-task').exists()
     assert not (prefix / 'libexec/bbm-sandbox/sandbox-agentd').exists()

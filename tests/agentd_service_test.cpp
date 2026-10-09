@@ -1,3 +1,4 @@
+#include "ipc/session.hpp"
 #include "test_support.hpp"
 #include "virtualization/agentd_client.hpp"
 
@@ -17,14 +18,14 @@ using test::rejects;
 namespace {
     struct AgentdProcess {
         pid_t pid = -1;
-        std::unique_ptr<ipc::Transport> transport;
+        lib::UniqueFd descriptor;
 
         AgentdProcess(const fs::path &executable, const fs::path &workspace) {
             int sockets[2];
             check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
                   "socketpair failed");
-            transport = ipc::adopt_descriptor(sockets[0], ipc::DescriptorKind::Socket);
-            auto child_owner = ipc::adopt_descriptor(sockets[1], ipc::DescriptorKind::Socket);
+            descriptor = lib::UniqueFd(sockets[0]);
+            lib::UniqueFd child_owner(sockets[1]);
             const std::string binary = executable.string(), directory = workspace.string();
             std::vector<char *> argv{const_cast<char *>(binary.c_str()),
                                      const_cast<char *>("--serve"),
@@ -53,7 +54,7 @@ namespace {
             check(status == 0, "could not start agentd executable");
         }
         ~AgentdProcess() {
-            transport.reset();
+            descriptor.reset();
             if (pid > 0) {
                 const auto until = ipc::Clock::now() + std::chrono::seconds(3);
                 while (waitpid(pid, nullptr, WNOHANG) == 0) {
@@ -96,7 +97,7 @@ auto main(int argc, char **argv) -> int {
         mkfifo((workspace / "fifo").c_str(), 0600);
         {
             AgentdProcess daemon(argv[1], workspace);
-            virtualization::AgentdClient client(std::move(daemon.transport));
+            virtualization::AgentdClient client(std::move(daemon.descriptor));
             rejects([&] {
                 client.ping();
             });
@@ -109,6 +110,11 @@ auto main(int argc, char **argv) -> int {
             client.write(workspace / "sub/binary", content);
             check(client.read(workspace / "sub/binary", content.size()) == content,
                   "chunked binary round trip failed");
+            fs::permissions(workspace / "sub/binary", fs::perms::owner_read | fs::perms::owner_write);
+            client.write(workspace / "sub/binary", "replacement");
+            check((fs::status(workspace / "sub/binary").permissions() & fs::perms::mask) ==
+                      (fs::perms::owner_read | fs::perms::owner_write),
+                  "atomic replacement changed file permissions");
             client.write(workspace / "empty", {});
             check(client.read(workspace / "empty", 1).empty(), "empty file failed");
             for (const auto &path : {workspace / "escape", workspace / "../outside",
@@ -178,7 +184,7 @@ auto main(int argc, char **argv) -> int {
         {
             AgentdProcess daemon(argv[1], workspace);
             {
-                ipc::Channel channel(std::move(daemon.transport));
+                ipc::Session channel(std::move(daemon.descriptor));
                 const auto until = ipc::Clock::now() + std::chrono::seconds(2);
                 channel.send(hello(), until);
                 check(channel.receive(until).type == "core.ready", "raw handshake failed");
@@ -211,7 +217,7 @@ auto main(int argc, char **argv) -> int {
         {
             AgentdProcess daemon(argv[1], workspace);
             {
-                ipc::Channel channel(std::move(daemon.transport));
+                ipc::Session channel(std::move(daemon.descriptor));
                 const auto until = ipc::Clock::now() + std::chrono::seconds(2);
                 channel.send(hello(), until);
                 channel.receive(until);
@@ -234,7 +240,7 @@ auto main(int argc, char **argv) -> int {
         {
             AgentdProcess daemon(argv[1], workspace);
             {
-                ipc::Channel channel(std::move(daemon.transport));
+                ipc::Session channel(std::move(daemon.descriptor));
                 const auto until = ipc::Clock::now() + std::chrono::seconds(2);
                 channel.send(hello(), until);
                 channel.receive(until);
@@ -265,7 +271,7 @@ auto main(int argc, char **argv) -> int {
         {
             AgentdProcess daemon(argv[1], workspace);
             {
-                ipc::Channel channel(std::move(daemon.transport));
+                ipc::Session channel(std::move(daemon.descriptor));
                 const auto until = ipc::Clock::now() + std::chrono::seconds(2);
                 channel.send(hello(), until);
                 channel.receive(until);

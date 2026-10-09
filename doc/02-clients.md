@@ -4,7 +4,7 @@
 
 ```text
 Sandbox → RuntimeBackend
-             ├─ Session → AgentdClient → agentd → 命令 / 文件操作
+             ├─ AgentdClient → Session → agentd → 命令 / 文件操作
              └─ ContainerClient → libcrun 工作进程 → 容器生命周期
 ```
 
@@ -12,7 +12,7 @@ Sandbox → RuntimeBackend
 
 agentd 常驻在 sandbox 内。容器中它是 PID 1；microVM 中它在 Guest 内启动，并配置任务身份和 cgroup。文件操作由服务内函数处理，命令通过子进程执行。
 
-AgentdClient 负责握手、请求 ID、exec、输出事件、取消、分块文件读写、ping 和工作区冻结。`Session` 持有连接，负责连接建立、隔离类型校验、断开和部分错误到 Result 的转换。
+AgentdClient 持有 Session，负责握手、隔离类型校验、启动建连重试、请求 ID、exec、输出事件、取消、分块文件读写、ping、工作区冻结和部分错误到 Result 的转换。`ipc::Session` 接收已经建立的连接，负责消息分帧收发、发送互斥、断开与失效处理；字节 I/O 由 `ipc::SocketStream` 提供。
 
 选择常驻服务是因为命令与文件操作频繁，且都需要相同的路径、身份和资源策略。每次调用 libcrun exec 会重复创建运行时工作进程，也不能直接复用到 VM。单独启动文件助手则会重复实现启动、监督和数据传输。常驻 agentd 把这些操作放在一套服务逻辑中。
 

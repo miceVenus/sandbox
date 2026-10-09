@@ -21,8 +21,7 @@ auto main(int argc, char **argv) -> int {
         if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) != 0) {
             throw std::runtime_error("installed agentd socketpair failed");
         }
-        virtualization::AgentdClient agentd(
-            ipc::adopt_descriptor(sockets[0], ipc::DescriptorKind::Socket));
+        virtualization::AgentdClient agentd{lib::UniqueFd(sockets[0])};
         close(sockets[1]);
         bool refused = false;
         try {

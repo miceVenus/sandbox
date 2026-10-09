@@ -5,15 +5,14 @@ add_library(sandbox_shared OBJECT
   src/lib/string.cpp
   src/lib/filesystem.cpp
   src/lib/descriptor.cpp
-  src/lib/io.cpp
-  src/lib/socket.cpp
   src/lib/json.cpp
   src/lib/memory_file.cpp
   src/lib/elf.cpp
   src/lib/process.cpp
+  src/ipc/io.cpp
+  src/ipc/socket.cpp
   src/ipc/protocol.cpp
-  src/ipc/transport.cpp
-  src/workspace/workspace_files.cpp)
+  src/ipc/session.cpp)
 target_compile_features(sandbox_shared PRIVATE cxx_std_17)
 target_compile_options(sandbox_shared PRIVATE -Wall -Wextra -Wpedantic)
 target_include_directories(sandbox_shared PRIVATE "${PROJECT_SOURCE_DIR}/include")
@@ -28,12 +27,10 @@ add_library(sandbox_core
   src/virtualization/microvm/krun_runtime.cpp
   src/virtualization/container_client.cpp
   src/virtualization/agentd_client.cpp
-  src/virtualization/session.cpp
-  src/virtualization/oci.cpp
-  src/virtualization/bundle.cpp
-  src/virtualization/rootfs_program.cpp
-  src/virtualization/runtime_policy.cpp
-  src/virtualization/host_tools.cpp
+  src/virtualization/environment/rootfs.cpp
+  src/virtualization/environment/host_tools.cpp
+  src/virtualization/environment/oci.cpp
+  src/virtualization/container/resources.cpp
   src/resources.cpp
   $<TARGET_OBJECTS:sandbox_shared>)
 add_library(bbm::sandbox_core ALIAS sandbox_core)
@@ -55,6 +52,7 @@ endif()
 
 target_sources(agentd PRIVATE
   src/agentd/service.cpp
+  src/agentd/workspace_files.cpp
   src/agentd/container_bootstrap.cpp
   src/agentd/microvm_bootstrap.cpp
   $<TARGET_OBJECTS:sandbox_shared>)

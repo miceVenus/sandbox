@@ -16,8 +16,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-auto ContainerClient::call(const crun_worker::Request &request, int timeout_ms,
-                           bool drain_until_eof, size_t output_limit, int listener_fd) -> Result {
+auto ContainerClient::call(const crun_worker::Request &request, int listener_fd) -> Result {
     using nlohmann::json;
     json message{{"version", crun_worker::protocol_version},
                  {"operation", static_cast<int>(request.operation)},
@@ -55,21 +54,21 @@ auto ContainerClient::call(const crun_worker::Request &request, int timeout_ms,
         std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()),
         crun_worker::control_fd);
         
-    lib::ProcessSupervision supervision;
-    supervision.inherited_fds.push_back(control.get());
+    lib::ProcessOptions options;
+    // Detached PID 1 may retain these pipes after the startup worker exits.
+    options.drain_until_eof = request.operation != SANDBOX_CRUN_START;
+    options.inherited_fds.push_back(control.get());
     if (listener_fd >= 0) {
-        supervision.inherited_fds.push_back(listener_fd);
+        options.inherited_fds.push_back(listener_fd);
     }
-    return lib::run_process({sandbox_resources::crun_worker_path().string()}, timeout_ms,
-                            output_limit, drain_until_eof, {}, supervision);
+    return lib::run_process({sandbox_resources::crun_worker_path().string()}, options);
 }
 
 auto ContainerClient::start(const std::string &id, const std::string &bundle, int listener_fd)
     -> Result {
     crun_worker::Request request(SANDBOX_CRUN_START, id);
     request.bundle = bundle;
-    // Detached PID 1 may retain the pipes; do not wait for its lifetime.
-    return call(request, 10000, false, 1024 * 1024, listener_fd);
+    return call(request, listener_fd);
 }
 
 auto ContainerClient::state(const std::string &id) -> Result {

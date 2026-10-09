@@ -1,4 +1,4 @@
-#include "lib/io.hpp"
+#include "ipc/io.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -6,10 +6,9 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
-#include <unistd.h>
 #include <utility>
 
-namespace lib {
+namespace ipc {
     namespace {
         [[noreturn]] void io_error(const char *operation) {
             throw IoError(std::string(operation) + ": " + std::strerror(errno));
@@ -37,36 +36,28 @@ namespace lib {
         }
     }
 
-    DescriptorStream::DescriptorStream(UniqueFd descriptor, DescriptorKind kind)
-        : descriptor_(std::move(descriptor)), kind_(kind) {
+    SocketStream::SocketStream(lib::UniqueFd descriptor)
+        : descriptor_(std::move(descriptor)) {
         const int fd = descriptor_.get();
         if (fd < 0) {
             throw IoError("invalid descriptor");
         }
-        const auto flags = fcntl(fd, F_GETFL);
-        if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ||
-            fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
-            const auto error = errno;
-            errno = error;
+        if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
             io_error("configure descriptor");
         }
     }
 
-    void DescriptorStream::interrupt() noexcept {
-        if (kind_ == DescriptorKind::Socket) {
-            shutdown(descriptor_.get(), SHUT_RDWR);
-        }
+    void SocketStream::interrupt() noexcept {
+        shutdown(descriptor_.get(), SHUT_RDWR);
     }
 
-    void DescriptorStream::write_all(std::string_view bytes, Deadline deadline) {
+    void SocketStream::write_all(std::string_view bytes, Deadline deadline) {
         while (!bytes.empty()) {
             if (Clock::now() >= deadline) {
                 throw IoTimeout();
             }
-            const auto count =
-                kind_ == DescriptorKind::Socket
-                    ? send(descriptor_.get(), bytes.data(), bytes.size(), MSG_NOSIGNAL)
-                    : ::write(descriptor_.get(), bytes.data(), bytes.size());
+            const auto count = send(descriptor_.get(), bytes.data(), bytes.size(),
+                                    MSG_NOSIGNAL | MSG_DONTWAIT);
             if (count > 0) {
                 bytes.remove_prefix(static_cast<size_t>(count));
             } else if (count < 0 && errno == EINTR) {
@@ -79,14 +70,15 @@ namespace lib {
         }
     }
 
-    auto DescriptorStream::read_exact(size_t size, Deadline deadline) -> std::string {
+    auto SocketStream::read_exact(size_t size, Deadline deadline) -> std::string {
         std::string output(size, '\0');
         size_t offset = 0;
         while (offset < size) {
             if (Clock::now() >= deadline) {
                 throw IoTimeout();
             }
-            const auto count = ::read(descriptor_.get(), output.data() + offset, size - offset);
+            const auto count =
+                recv(descriptor_.get(), output.data() + offset, size - offset, MSG_DONTWAIT);
             if (count > 0) {
                 offset += static_cast<size_t>(count);
             } else if (count == 0) {
@@ -102,4 +94,4 @@ namespace lib {
         return output;
     }
 
-} // namespace lib
+} // namespace ipc

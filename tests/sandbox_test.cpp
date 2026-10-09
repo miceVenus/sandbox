@@ -1,6 +1,6 @@
 #include "lib/process.hpp"
 #include "sandbox.hpp"
-#include "virtualization/host_tools.hpp"
+#include "virtualization/environment/environment.hpp"
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
@@ -9,6 +9,7 @@
 #include <unistd.h>
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+namespace environment = virtualization::environment;
 void check(bool value, const char *message) {
     if (!value) {
         throw std::runtime_error(message);
@@ -68,12 +69,14 @@ class FakeRuntime final : public RuntimeBackend {
         if (action == "/bin/fail") {
             return {7, false, false, {}, {}};
         }
+        lib::ProcessOptions options;
+        options.timeout_ms = command.timeout_ms;
+        options.output_limit = command.output_limit;
         if (action == "/bin/flood") {
-            return lib::run_process({"/bin/sh", "-c", "while :; do echo x; done"},
-                                    command.timeout_ms, command.output_limit);
+            return lib::run_process({"/bin/sh", "-c", "while :; do echo x; done"}, options);
         }
         if (action == "/bin/sleep") {
-            return lib::run_process({"/bin/sleep", "5"}, command.timeout_ms, command.output_limit);
+            return lib::run_process({"/bin/sleep", "5"}, options);
         }
         throw std::runtime_error("unknown test command");
     }
@@ -114,7 +117,7 @@ auto main() -> int {
         fs::create_directory(repo);
         auto git = [&](std::vector<std::string> args) {
             args.insert(args.begin(), {"/usr/bin/git", "-C", repo.string()});
-            auto r = lib::run_process(args, 10000);
+            auto r = lib::run_process(args);
             check(r.runtime_status == 0, "fixture Git failed");
         };
         git({"init", "-q"});
@@ -144,15 +147,16 @@ auto main() -> int {
             });
         }
         // Trusted A and private manager metadata cannot lie in imported host tool directories.
-        validate_host_tools(repo, root);
+        const auto environment_config = environment::make_config(invalid);
+        environment::validate_host_tools(environment_config, repo, root);
         rejects([&] {
-            validate_host_tools("/usr/share/private-repo", root);
+            environment::validate_host_tools(environment_config, "/usr/share/private-repo", root);
         });
         rejects([&] {
-            validate_host_tools(repo, "/usr/lib/private-manager");
+            environment::validate_host_tools(environment_config, repo, "/usr/lib/private-manager");
         });
         rejects([&] {
-            validate_host_tools("/usr", root);
+            environment::validate_host_tools(environment_config, "/usr", root);
         });
         auto fixture = [&] {
             json record = {{"id", id},

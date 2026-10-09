@@ -1,7 +1,10 @@
 #include "virtualization/agentd_client.hpp"
+#include "lib/error.hpp"
+#include "ipc/socket.hpp"
 
 #include <algorithm>
 #include <mutex>
+#include <thread>
 
 namespace virtualization {
     using namespace ipc;
@@ -10,9 +13,15 @@ namespace virtualization {
         : std::runtime_error(std::move(message)), code(std::move(value)) {
     }
 
-    AgentdClient::AgentdClient(std::unique_ptr<Transport> transport, Limits requested,
+    AgentdClient::AgentdClient(lib::UniqueFd descriptor, Limits requested,
                                std::chrono::milliseconds io_timeout)
-        : channel_(std::move(transport)), limits_(requested), io_timeout_(io_timeout) {
+        : session_(std::move(descriptor)), limits_(requested), io_timeout_(io_timeout) {
+        validate_configuration();
+    }
+
+    void AgentdClient::validate_configuration() const {
+        const auto io_timeout = io_timeout_;
+        const auto requested = limits_;
         require(io_timeout.count() > 0 && io_timeout <= std::chrono::minutes(1),
                 "invalid I/O timeout");
         require(requested.file_bytes > 0 && requested.file_bytes <= 64 * 1024 * 1024 &&
@@ -22,8 +31,98 @@ namespace virtualization {
                 "invalid agentd limits");
     }
 
-    auto AgentdClient::deadline() const -> Deadline {
-        return Clock::now() + io_timeout_;
+    void AgentdClient::connect(const std::filesystem::path &socket, Limits requested,
+                              std::string_view isolation, std::chrono::milliseconds timeout,
+                              bool startup) {
+        std::scoped_lock operation(operations_);
+        if (session_.is_connected()) {
+            lib::require(socket_ == socket && ready_ &&
+                             runtime_info_.value("isolation", "") == isolation,
+                         "client is already connected to another agentd");
+            return;
+        }
+        limits_ = requested;
+        validate_configuration();
+        const auto until = ipc::Clock::now() + timeout;
+        for (;;) {
+            try {
+                session_.attach(ipc::connect_unix(socket, until));
+                handshake_locked();
+                require(runtime_info_.value("isolation", "") == isolation,
+                        "unexpected agentd runtime identity");
+                socket_ = socket;
+                return;
+            } catch (const ipc::IoError &) {
+                session_.disconnect();
+                ready_ = false;
+                limits_ = requested;
+                if (!startup || ipc::Clock::now() >= until) {
+                    throw;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            } catch (...) {
+                session_.disconnect();
+                ready_ = false;
+                throw;
+            }
+        }
+    }
+
+    void AgentdClient::disconnect() {
+        std::scoped_lock operation(operations_);
+        std::scoped_lock cancellation(cancellation_);
+        session_.disconnect();
+        ready_ = false;
+        active_exec_ = last_id_ = 0;
+        socket_.clear();
+        runtime_info_ = Json::object();
+    }
+
+    auto AgentdClient::is_connected() const -> bool {
+        return session_.is_connected();
+    }
+
+    auto AgentdClient::request_result(const std::function<Result()> &operation) -> Result {
+        try {
+            return operation();
+        } catch (const RemoteError &error) {
+            Result result;
+            result.runtime_status = 1;
+            result.err = error.what();
+            return result;
+        } catch (const ipc::IoTimeout &error) {
+            Result result;
+            result.timed_out = true;
+            result.err = error.what();
+            return result;
+        }
+    }
+
+    auto AgentdClient::execute_result(const RuntimeCommand &command) -> Result {
+        return request_result([&] { return execute(command); });
+    }
+
+    auto AgentdClient::read_result(const std::filesystem::path &path, size_t limit) -> Result {
+        return request_result([&] {
+            Result result;
+            result.out = read(path, limit);
+            result.runtime_status = 0;
+            return result;
+        });
+    }
+
+    auto AgentdClient::write_result(const std::filesystem::path &path,
+                                   std::string_view content) -> Result {
+        return request_result([&] {
+            write(path, content);
+            Result result;
+            result.runtime_status = 0;
+            return result;
+        });
+    }
+
+    auto AgentdClient::deadline() const -> ipc::Deadline {
+        return ipc::Clock::now() + io_timeout_;
     }
     void AgentdClient::require_ready() const {
         require(ready_, "agentd handshake is required");
@@ -34,8 +133,8 @@ namespace virtualization {
         return ++last_id_;
     }
 
-    auto AgentdClient::receive(uint32_t id, Deadline until) -> Message {
-        auto message = channel_.receive(until);
+    auto AgentdClient::receive(uint32_t id, ipc::Deadline until) -> Message {
+        auto message = session_.receive(until);
         try {
             require(message.id == id && message.flag != Flag::Request,
                     "unexpected response ID or flag");
@@ -46,15 +145,15 @@ namespace virtualization {
             }
             return message;
         } catch (const ProtocolError &) {
-            channel_.invalidate();
+            session_.invalidate();
             throw;
         }
     }
 
-    auto AgentdClient::expect(uint32_t id, Flag flag, const char *type, Deadline until) -> Message {
+    auto AgentdClient::expect(uint32_t id, Flag flag, const char *type, ipc::Deadline until) -> Message {
         auto message = receive(id, until);
         if (message.flag != flag || message.type != type) {
-            channel_.invalidate();
+            session_.invalidate();
             throw ProtocolError("unexpected operation response: " + message.type);
         }
         return message;
@@ -62,9 +161,13 @@ namespace virtualization {
 
     void AgentdClient::handshake() {
         std::scoped_lock operation(operations_);
+        handshake_locked();
+    }
+
+    void AgentdClient::handshake_locked() {
         require(!ready_, "agentd handshake already completed");
         const auto until = deadline();
-        channel_.send({0,
+        session_.send({0,
                        Flag::Request,
                        "core.hello",
                        {{"protocol", protocol_name},
@@ -97,7 +200,7 @@ namespace virtualization {
             runtime_info_ = p.value("runtime", Json::object());
             ready_ = true;
         } catch (...) {
-            channel_.invalidate();
+            session_.invalidate();
             throw;
         }
     }
@@ -106,17 +209,17 @@ namespace virtualization {
         std::scoped_lock operation(operations_);
         const auto id = next_id();
         const auto until = deadline();
-        channel_.send({id, Flag::Request, "workspace.freeze", {{"frozen", frozen}}}, until);
+        session_.send({id, Flag::Request, "workspace.freeze", {{"frozen", frozen}}}, until);
         const auto response = expect(id, Flag::Terminal, "workspace.frozen", until);
         require(response.payload.at("frozen") == frozen, "agentd freeze acknowledgement mismatch");
     }
 
     void AgentdClient::send_data(uint32_t id, const char *type, std::string_view bytes,
-                                 Deadline until) {
+                                 ipc::Deadline until) {
         size_t offset = 0;
         while (!bytes.empty()) {
             const auto count = std::min(bytes.size(), chunk_bytes);
-            channel_.send({id,
+            session_.send({id,
                            Flag::Event,
                            type,
                            {{"offset", offset}, {"data", binary_bytes(bytes.substr(0, count))}}},
@@ -147,7 +250,7 @@ namespace virtualization {
                 "command exceeds negotiated limits");
         const auto id = next_id();
         const auto transfer_until = deadline();
-        channel_.send({id,
+        session_.send({id,
                        Flag::Request,
                        "exec.start",
                        {{"argv", command.argv},
@@ -158,9 +261,9 @@ namespace virtualization {
                       transfer_until);
         expect(id, Flag::Event, "exec.accepted", transfer_until);
         send_data(id, "exec.stdin", command.stdin_data, transfer_until);
-        channel_.send({id, Flag::Event, "exec.stdin.end", Json::object()}, transfer_until);
+        session_.send({id, Flag::Event, "exec.stdin.end", Json::object()}, transfer_until);
         const auto execution_until =
-            Clock::now() + std::chrono::milliseconds(command.timeout_ms) + io_timeout_;
+            ipc::Clock::now() + std::chrono::milliseconds(command.timeout_ms) + io_timeout_;
         expect(id, Flag::Event, "exec.started", execution_until);
         {
             std::scoped_lock lock(cancellation_);
@@ -212,13 +315,13 @@ namespace virtualization {
                                 stderr_stream ? OutputStream::Stderr : OutputStream::Stdout, data);
                         }
                     } catch (...) {
-                        channel_.invalidate();
+                        session_.invalidate();
                         throw;
                     }
                 }
             }
         } catch (const ProtocolError &) {
-            channel_.invalidate();
+            session_.invalidate();
             throw;
         }
     }
@@ -228,7 +331,7 @@ namespace virtualization {
         if (!active_exec_) {
             return false;
         }
-        channel_.send({active_exec_, Flag::Event, "exec.cancel", Json::object()}, deadline());
+        session_.send({active_exec_, Flag::Event, "exec.cancel", Json::object()}, deadline());
         return true;
     }
 
@@ -237,7 +340,7 @@ namespace virtualization {
         require(limit > 0 && limit <= limits_.file_bytes, "invalid read limit");
         const auto id = next_id();
         const auto until = deadline();
-        channel_.send({id, Flag::Request, "fs.read", {{"path", path.string()}, {"limit", limit}}},
+        session_.send({id, Flag::Request, "fs.read", {{"path", path.string()}, {"limit", limit}}},
                       until);
         std::string content;
         try {
@@ -258,7 +361,7 @@ namespace virtualization {
                 content += data;
             }
         } catch (const ProtocolError &) {
-            channel_.invalidate();
+            session_.invalidate();
             throw;
         }
     }
@@ -268,18 +371,18 @@ namespace virtualization {
         require(content.size() <= limits_.file_bytes, "file exceeds negotiated limit");
         const auto id = next_id();
         const auto until = deadline();
-        channel_.send(
+        session_.send(
             {id, Flag::Request, "fs.write", {{"path", path.string()}, {"size", content.size()}}},
             until);
         expect(id, Flag::Event, "fs.write.accepted", until);
         send_data(id, "fs.write.data", content, until);
-        channel_.send({id, Flag::Event, "fs.write.end", Json::object()}, until);
+        session_.send({id, Flag::Event, "fs.write.end", Json::object()}, until);
         const auto response = expect(id, Flag::Terminal, "fs.write.done", until);
         try {
             require(unsigned_field(response.payload, "size", limits_.file_bytes) == content.size(),
                     "write size mismatch");
         } catch (...) {
-            channel_.invalidate();
+            session_.invalidate();
             throw;
         }
     }
@@ -288,7 +391,7 @@ namespace virtualization {
         std::scoped_lock operation(operations_);
         const auto id = next_id();
         const auto until = deadline();
-        channel_.send({id, Flag::Request, "core.ping", Json::object()}, until);
+        session_.send({id, Flag::Request, "core.ping", Json::object()}, until);
         expect(id, Flag::Terminal, "core.pong", until);
     }
 } // namespace virtualization

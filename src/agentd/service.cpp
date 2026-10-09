@@ -1,11 +1,11 @@
 #include "agentd/service.hpp"
+#include "agentd/workspace_files.hpp"
+#include "ipc/session.hpp"
 #include "lib/process.hpp"
-#include "virtualization/runtime.hpp"
-#include "workspace/workspace_files.hpp"
 
 #include <algorithm>
 #include <atomic>
-#include <sys/fsuid.h>
+#include <optional>
 #include <thread>
 
 namespace agentd {
@@ -13,37 +13,13 @@ namespace agentd {
     namespace {
         namespace fs = std::filesystem;
 
-        class FileIdentity {
-          public:
-            explicit FileIdentity(bool mapped) : active_(mapped) {
-                if (active_) {
-                    previous_gid_ = setfsgid(65534);
-                    previous_ = setfsuid(65534);
-                    if (setfsuid(-1) != 65534 || setfsgid(-1) != 65534) {
-                        setfsuid(previous_);
-                        setfsgid(previous_gid_);
-                        throw ProtocolError("cannot enter agentd file identity");
-                    }
-                }
-            }
-            ~FileIdentity() {
-                if (active_) {
-                    setfsuid(previous_);
-                    setfsgid(previous_gid_);
-                }
-            }
-
-          private:
-            bool active_;
-            int previous_ = 0;
-            int previous_gid_ = 0;
-        };
-
         struct Task {
             uint32_t id;
-            RuntimeCommand command;
+            std::vector<std::string> argv;
+            std::string stdin_data;
+            lib::ProcessOptions options;
             std::atomic<bool> cancel{false};
-            std::atomic<bool> done{false};
+            std::atomic<bool> finished{false};
             std::thread worker;
 
             ~Task() {
@@ -55,19 +31,20 @@ namespace agentd {
         };
 
         struct Upload {
+            enum class Kind { Stdin, File };
+            Kind kind;
             uint32_t id = 0;
             size_t expected = 0;
             size_t received = 0;
             std::unique_ptr<WorkspaceFiles::Write> writer;
-            std::unique_ptr<Task> task;
-            Deadline deadline;
+            ipc::Deadline deadline;
         };
 
         class Service {
           public:
-            Service(std::unique_ptr<Transport> transport, AgentdConfig config)
-                : channel_(std::move(transport)), config_(std::move(config)),
-                  files_(config_.workspace), limits_(config_.limits) {
+            Service(lib::UniqueFd descriptor, ServiceConfig config)
+                : session_(std::move(descriptor)), config_(std::move(config)),
+                  files_(config_.workspace, config_.mapped_file_identity), limits_(config_.limits) {
                 require(config_.io_timeout.count() > 0 && config_.idle_timeout.count() >= 0 &&
                             limits_.file_bytes > 0 && limits_.file_bytes <= 64 * 1024 * 1024 &&
                             limits_.stdin_bytes > 0 && limits_.stdin_bytes <= 64 * 1024 * 1024 &&
@@ -76,16 +53,8 @@ namespace agentd {
                         "invalid agentd configuration");
             }
 
-            ~Service() {
-                try {
-                    discard_upload();
-                } catch (...) {
-                    channel_.invalidate();
-                }
-            }
-
             void run() {
-                const auto hello = channel_.receive(Clock::now() + config_.io_timeout);
+                const auto hello = session_.receive(ipc::Clock::now() + config_.io_timeout);
                 require(hello.id == 0 && hello.flag == Flag::Request && hello.type == "core.hello",
                         "expected initial core.hello");
                 handshake(hello.payload);
@@ -103,21 +72,23 @@ namespace agentd {
                     const auto until =
                         upload_ ? upload_->deadline
                         : config_.idle_timeout.count() == 0
-                            ? Deadline::max()
-                            : Clock::now() + config_.idle_timeout +
-                                  (task_ && !task_->done
+                            ? ipc::Deadline::max()
+                            : ipc::Clock::now() + config_.idle_timeout +
+                                  (task_ && !task_->finished
                                        ? std::chrono::milliseconds(limits_.timeout_ms)
                                        : std::chrono::milliseconds(0));
-                    const auto message = channel_.receive(until);
+                    const auto message = session_.receive(until);
                     if (message.flag == Flag::Event) {
                         event(message);
                         continue;
                     }
+
                     require(message.flag == Flag::Request && message.id > last_request_ && !upload_,
                             "invalid request order or overlapping upload");
+
                     last_request_ = message.id;
                     if (task_) {
-                        if (!task_->done) {
+                        if (!task_->finished) {
                             error(message.id, "busy", "agentd is executing another command");
                             continue;
                         }
@@ -129,14 +100,15 @@ namespace agentd {
 
           private:
             void discard_upload() {
-                FileIdentity file_identity(config_.mapped_file_identity && upload_ &&
-                                           upload_->writer);
+                if (upload_ && upload_->kind == Upload::Kind::Stdin) {
+                    task_.reset();
+                }
                 upload_.reset();
             }
 
             void reply(uint32_t id, Flag flag, const char *type, Json payload) {
-                channel_.send({id, flag, type, std::move(payload)},
-                              Clock::now() + config_.io_timeout);
+                session_.send({id, flag, type, std::move(payload)},
+                              ipc::Clock::now() + config_.io_timeout);
             }
             void error(uint32_t id, const char *code, const std::string &message) {
                 reply(id, Flag::Terminal, "core.error",
@@ -161,42 +133,46 @@ namespace agentd {
                         "zero negotiated limits");
             }
 
-            RuntimeCommand command(const Json &payload) {
+            auto parse_task(uint32_t id, const Json &payload) -> std::unique_ptr<Task> {
                 require(payload.contains("argv") && payload.at("argv").is_array() &&
                             !payload.at("argv").empty() && payload.at("argv").size() <= 1024,
                         "invalid command argv");
-                RuntimeCommand result;
+                auto task = std::make_unique<Task>();
+                task->id = id;
                 size_t total = 0;
                 for (const auto &argument : payload.at("argv")) {
                     require(argument.is_string(), "argv must contain text");
                     auto text = argument.get<std::string>();
                     require(text.find('\0') == std::string::npos, "NUL in argv");
                     total += text.size();
-                    result.argv.push_back(std::move(text));
+                    task->argv.push_back(std::move(text));
                 }
-                require(total <= 32 * 1024 && !result.argv[0].empty() && result.argv[0][0] == '/',
+                require(total <= 32 * 1024 && !task->argv[0].empty() && task->argv[0][0] == '/',
                         "expected an absolute executable path and bounded argv");
-                result.cwd = text_field(payload, "cwd");
-                require(result.cwd.is_absolute(), "cwd must be absolute");
-                for (const auto &part : result.cwd) {
+                task->options.cwd = text_field(payload, "cwd");
+                require(task->options.cwd.is_absolute(), "cwd must be absolute");
+                for (const auto &part : task->options.cwd) {
                     require(part != "..", "cwd traversal rejected");
                 }
-                const auto relative = result.cwd.lexically_normal().lexically_relative(
+                const auto relative = task->options.cwd.lexically_normal().lexically_relative(
                     config_.workspace.lexically_normal());
                 require(!relative.empty() && !relative.is_absolute(), "cwd is outside workspace");
                 for (const auto &part : relative) {
                     require(part != "..", "cwd is outside workspace");
                 }
-                result.timeout_ms = unsigned_field(payload, "timeout_ms", limits_.timeout_ms);
-                result.output_limit = unsigned_field(payload, "output_bytes", limits_.output_bytes);
-                require(result.timeout_ms > 0 && result.output_limit > 0, "invalid command limits");
-                return result;
+                task->options.timeout_ms = unsigned_field(payload, "timeout_ms", limits_.timeout_ms);
+                task->options.output_limit =
+                    unsigned_field(payload, "output_bytes", limits_.output_bytes);
+                require(task->options.timeout_ms > 0 && task->options.output_limit > 0,
+                        "invalid command limits");
+                task->options.environment = config_.task_environment;
+                task->options.cancel = &task->cancel;
+                task->options.kill_remaining_group = true;
+                return task;
             }
 
             void request(const Message &message) {
                 try {
-                    FileIdentity file_identity(config_.mapped_file_identity &&
-                                               message.type.compare(0, 3, "fs.") == 0);
                     if (message.type == "core.ping") {
                         reply(message.id, Flag::Terminal, "core.pong", Json::object());
                     } else if (message.type == "workspace.freeze") {
@@ -205,24 +181,24 @@ namespace agentd {
                         config_.freeze_workspace(message.payload.at("frozen"));
                         reply(message.id, Flag::Terminal, "workspace.frozen", message.payload);
                     } else if (message.type == "exec.start") {
-                        auto upload = std::make_unique<Upload>();
-                        upload->id = message.id;
-                        upload->expected =
+                        Upload upload{};
+                        upload.id = message.id;
+                        upload.expected =
                             unsigned_field(message.payload, "stdin_bytes", limits_.stdin_bytes);
-                        upload->deadline = Clock::now() + config_.io_timeout;
-                        upload->task = std::make_unique<Task>();
-                        upload->task->id = message.id;
-                        upload->task->command = command(message.payload);
+                        upload.deadline = ipc::Clock::now() + config_.io_timeout;
+                        upload.kind = Upload::Kind::Stdin;
+                        task_ = parse_task(message.id, message.payload);
                         upload_ = std::move(upload);
                         reply(message.id, Flag::Event, "exec.accepted", Json::object());
                     } else if (message.type == "fs.write") {
-                        auto upload = std::make_unique<Upload>();
-                        upload->id = message.id;
-                        upload->expected =
+                        Upload upload{};
+                        upload.id = message.id;
+                        upload.expected =
                             unsigned_field(message.payload, "size", limits_.file_bytes);
-                        upload->deadline = Clock::now() + config_.io_timeout;
-                        upload->writer = files_.begin_write(text_field(message.payload, "path"),
-                                                            limits_.file_bytes);
+                        upload.deadline = ipc::Clock::now() + config_.io_timeout;
+                        upload.kind = Upload::Kind::File;
+                        upload.writer = files_.begin_write(text_field(message.payload, "path"),
+                                                           limits_.file_bytes);
                         upload_ = std::move(upload);
                         reply(message.id, Flag::Event, "fs.write.accepted", Json::object());
                     } else if (message.type == "fs.read") {
@@ -231,9 +207,9 @@ namespace agentd {
                         require(limit > 0, "invalid read limit");
                         const auto content =
                             files_.read(text_field(message.payload, "path"), limit);
-                        const auto until = Clock::now() + config_.io_timeout;
+                        const auto until = ipc::Clock::now() + config_.io_timeout;
                         for (size_t offset = 0; offset < content.size(); offset += chunk_bytes) {
-                            channel_.send({message.id,
+                            session_.send({message.id,
                                            Flag::Event,
                                            "fs.read.data",
                                            {{"offset", offset},
@@ -246,7 +222,7 @@ namespace agentd {
                     } else {
                         error(message.id, "unsupported", "unsupported operation: " + message.type);
                     }
-                } catch (const TransportError &) {
+                } catch (const ipc::IoError &) {
                     throw;
                 } catch (const ProtocolError &failure) {
                     discard_upload();
@@ -258,16 +234,14 @@ namespace agentd {
             }
 
             void event(const Message &message) {
-                FileIdentity file_identity(config_.mapped_file_identity && upload_ &&
-                                           upload_->writer);
                 if (message.type == "exec.cancel" && message.id != 0 && message.id == last_exec_) {
-                    if (task_ && !task_->done) {
+                    if (task_ && !task_->finished) {
                         task_->cancel = true;
                     }
                     return; // A late cancellation never targets a subsequent request.
                 }
                 require(upload_ && message.id == upload_->id, "event does not belong to an upload");
-                const bool exec = bool(upload_->task);
+                const bool exec = upload_->kind == Upload::Kind::Stdin;
                 const std::string data_type = exec ? "exec.stdin" : "fs.write.data";
                 const std::string end_type = exec ? "exec.stdin.end" : "fs.write.end";
                 if (message.type == data_type) {
@@ -279,7 +253,7 @@ namespace agentd {
                     require(!data.empty() && data.size() <= upload_->expected - upload_->received,
                             "upload exceeds declared size");
                     if (exec) {
-                        upload_->task->command.stdin_data += data;
+                        task_->stdin_data += data;
                     } else {
                         upload_->writer->append(data);
                     }
@@ -289,7 +263,6 @@ namespace agentd {
                 require(message.type == end_type && upload_->received == upload_->expected,
                         "incomplete or invalid upload termination");
                 if (exec) {
-                    task_ = std::move(upload_->task);
                     last_exec_ = task_->id;
                     upload_.reset();
                     start_task();
@@ -305,67 +278,82 @@ namespace agentd {
             void start_task() {
                 Task *task = task_.get();
                 task->worker = std::thread([this, task] {
-                    try {
-                        reply(task->id, Flag::Event, "exec.started", Json::object());
-                        size_t stdout_offset = 0, stderr_offset = 0;
-                        lib::ProcessSupervision supervision;
-                        supervision.cwd = task->command.cwd;
-                        supervision.environment = config_.task_environment;
-                        supervision.cancel = &task->cancel;
-                        supervision.kill_remaining_group = true;
-                        supervision.on_output = [&](bool stderr_stream, std::string_view bytes) {
-                            auto &offset = stderr_stream ? stderr_offset : stdout_offset;
-                            reply(task->id, Flag::Event,
-                                  stderr_stream ? "exec.stderr" : "exec.stdout",
-                                  {{"offset", offset}, {"data", binary_bytes(bytes)}});
-                            offset += bytes.size();
-                        };
-                        auto argv = task->command.argv;
-                        if (!config_.task_launcher.empty()) {
-                            argv.insert(argv.begin(),
-                                        {config_.task_launcher.string(), "--run-task", "--"});
-                        }
-                        const auto result = lib::run_process(argv, task->command.timeout_ms,
-                                                             task->command.output_limit, true,
-                                                             task->command.stdin_data, supervision);
-                        if (config_.finish_tasks)
-                            config_.finish_tasks();
-                        task->done = true;
-                        reply(task->id, Flag::Terminal, "exec.exited",
+                    execute_task(*task);
+                });
+            }
+
+            void execute_task(Task &task) {
+                Result result;
+                std::string failure;
+                bool connection_failed = false;
+                try {
+                    reply(task.id, Flag::Event, "exec.started", Json::object());
+                    size_t stdout_offset = 0, stderr_offset = 0;
+                    auto options = task.options;
+                    options.stdin_data = task.stdin_data;
+                    options.on_output = [&](bool stderr_stream, std::string_view bytes) {
+                        auto &offset = stderr_stream ? stderr_offset : stdout_offset;
+                        reply(task.id, Flag::Event, stderr_stream ? "exec.stderr" : "exec.stdout",
+                              {{"offset", offset}, {"data", binary_bytes(bytes)}});
+                        offset += bytes.size();
+                    };
+                    auto argv = task.argv;
+                    if (!config_.task_launcher.empty()) {
+                        argv.insert(argv.begin(),
+                                    {config_.task_launcher.string(), "--run-task", "--"});
+                    }
+                    result = lib::run_process(argv, options);
+                } catch (const IoError &) {
+                    connection_failed = true;
+                } catch (const std::exception &error) {
+                    failure = error.what();
+                }
+
+                // Reclaim descendants once, including when execution or streaming failed.
+                try {
+                    if (config_.cleanup_tasks) {
+                        config_.cleanup_tasks();
+                    }
+                } catch (...) {
+                    task.finished = true;
+                    session_.invalidate();
+                    return;
+                }
+                // Execution and cleanup are complete before the terminal becomes visible.
+                // The receive loop joins this worker before accepting the next command.
+                task.finished = true;
+                if (connection_failed) {
+                    session_.invalidate();
+                    return;
+                }
+                try {
+                    if (!failure.empty()) {
+                        error(task.id, "exec_error", failure);
+                    } else {
+                        reply(task.id, Flag::Terminal, "exec.exited",
                               {{"code", uint32_t(result.runtime_status)},
                                {"timed_out", result.timed_out},
                                {"output_limited", result.output_limited},
                                {"cancelled", result.cancelled}});
-                    } catch (const std::exception &failure) {
-                        try {
-                            if (config_.finish_tasks)
-                                config_.finish_tasks();
-                        } catch (...) {
-                            channel_.invalidate();
-                        }
-                        task->done = true;
-                        try {
-                            error(task->id, "exec_error", failure.what());
-                        } catch (...) {
-                            channel_.invalidate();
-                        }
                     }
-                });
+                } catch (...) {
+                    session_.invalidate();
+                }
             }
 
-            // Declared before task_: the channel outlives cancellation/join during unwind.
-            Channel channel_;
-            AgentdConfig config_;
+            // Declared before task_: the session outlives cancellation/join during unwind.
+            ipc::Session session_;
+            ServiceConfig config_;
             WorkspaceFiles files_;
             Limits limits_;
-            std::unique_ptr<Upload> upload_;
+            std::optional<Upload> upload_;
             std::unique_ptr<Task> task_;
             uint32_t last_request_ = 0;
             uint32_t last_exec_ = 0;
         };
     } // namespace
 
-    void serve_agentd(std::unique_ptr<Transport> transport, const AgentdConfig &config) {
-        Service(std::move(transport), config).run();
+    void serve(lib::UniqueFd descriptor, const ServiceConfig &config) {
+        Service(std::move(descriptor), config).run();
     }
 } // namespace agentd

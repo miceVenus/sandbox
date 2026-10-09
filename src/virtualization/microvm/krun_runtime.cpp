@@ -4,16 +4,11 @@
 #include "lib/process.hpp"
 #include "resources.hpp"
 #include "virtualization/agentd_client.hpp"
-#include "virtualization/bundle.hpp"
+#include "virtualization/environment/environment.hpp"
 #include "virtualization/container_client.hpp"
-#include "virtualization/host_tools.hpp"
-#include "virtualization/oci.hpp"
-#include "virtualization/rootfs_program.hpp"
-#include "virtualization/runtime_policy.hpp"
-#include "virtualization/session.hpp"
+#include "virtualization/container/resources.hpp"
 
 #include <fcntl.h>
-#include <fstream>
 #include <linux/kvm.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -25,6 +20,7 @@
 namespace fs = std::filesystem;
 
 using json = nlohmann::json;
+namespace environment = virtualization::environment;
 
 #ifdef SANDBOX_HAS_LIBKRUN
 namespace {
@@ -88,29 +84,29 @@ namespace {
             }
             lib::require(fs::is_regular_file(sandbox_resources::krun_firmware_path()),
                          "libkrunfw is unavailable at its configured installation path");
-            if (info.options.environment == Environment::HostTools) {
-                validate_host_tools(info.options.src_repo, state_directory_.parent_path());
-            }
+            const auto environment_config = environment::make_config(info.options);
+            environment::validate_host_tools(environment_config, info.options.src_repo,
+                                              state_directory_.parent_path());
             info.rootless = true;
-            // Reuse the environment builder; the OCI config here is not launched.
+            // Prepare the Guest userspace independently of the outer OCI container.
             auto guest = info;
             guest.bundle_dir = info.directory / "guest";
-            prepare_bundle(guest);
-            fs::remove(guest.bundle_dir / "config.json");
+            environment::prepare_rootfs(guest, environment_config);
             const auto guest_root = guest.bundle_dir / "rootfs";
-            for (const auto *dir :
-                 {"sys", "sys/fs/cgroup", "runtime-data", "build", "env", "cache"}) {
-                fs::create_directories(guest_root / dir);
+            for (const auto *directory : {"sys/fs/cgroup", "runtime-data"}) {
+                fs::create_directories(guest_root / directory);
             }
-            for (const auto *dir : {"build/tmp", "env/home", "cache/pip"}) {
-                fs::create_directories(info.directory / "runtime-data" / dir);
+            if (info.options.environment == Environment::Minimal) {
+                environment::prepare_runtime_data(guest);
             }
+
             const auto &o = info.options;
             // RAM is half the Host budget; the remaining half covers the VMM and shared caches.
             const auto ram_mib = o.memory_bytes / (2 * 1024 * 1024);
             lib::require(ram_mib <= UINT32_MAX, "Guest RAM exceeds libkrun limits");
             json spec{{"workspace", o.ctr_repo.string()},
                       {"max_tasks", o.max_tasks},
+                      {"environment", environment_config.variables},
                       {"file_bytes", o.max_file_bytes},
                       {"output_bytes", o.max_output_bytes},
                       {"timeout_ms", o.cmd_timeout.count()},
@@ -130,11 +126,12 @@ namespace {
                                     "shares/data", "guest-root", "control", "sandbox-tools"}) {
                 fs::create_directories(host_root / dir);
             }
-            install_runtime_program(host_root, sandbox_resources::krun_runner_path(), runner_path);
+            environment::install_program(host_root, sandbox_resources::krun_runner_path(),
+                                         runner_path);
             lib::write_json(host_root / "sandbox-tools/krun.json", spec);
-            prepare_oci_config(host);
-            std::ifstream input(host.bundle_dir / "config.json");
-            auto oci = json::parse(input);
+            const environment::Config vmm_environment{
+                {}, {"PATH=/bin", "LANG=C", "HOME=/", "LD_LIBRARY_PATH=/sandbox-tools/lib"}};
+            auto oci = environment::make_oci_config(host, vmm_environment);
             auto bind = [&](const fs::path &source, const fs::path &target, bool readonly,
                             bool nodev = true) {
                 json flags = {"bind", readonly ? "ro" : "rw", "nosuid", "private"};
@@ -147,19 +144,14 @@ namespace {
                                          {"options", flags}});
             };
             bind(guest_root, "/guest-root", true);
-            if (o.environment == Environment::HostTools) {
-                for (const auto &tools : host_tool_mounts()) {
-                    bind(tools.source, fs::path("/guest-root") / tools.destination.relative_path(),
-                         true);
-                }
+            for (const auto &tools : environment_config.tool_mounts) {
+                bind(tools.source, fs::path("/guest-root") / tools.destination.relative_path(), true);
             }
             bind(info.directory / "runtime-data", "/shares/data", false);
             bind(control, "/control", false);
             bind("/dev/kvm", "/dev/kvm", false, false);
             oci["process"]["args"] = {runner_path, "/sandbox-tools/krun.json"};
             oci["process"]["cwd"] = "/";
-            oci["process"]["env"] = {"PATH=/bin", "LANG=C", "HOME=/",
-                                     "LD_LIBRARY_PATH=/sandbox-tools/lib"};
             oci["process"]["rlimits"][0]["soft"] = 1024;
             oci["process"]["rlimits"][0]["hard"] = 1024;
             lib::write_json(host.bundle_dir / "config.json", oci);
@@ -183,9 +175,9 @@ namespace {
 
         auto status(const SandboxInfo &info) -> RuntimeStatus override {
             if (!paused_) {
-                if (session_.is_connected()) {
+                if (agentd_client_.is_connected()) {
                     try {
-                        session_.ping();
+                        agentd_client_.ping();
                         return {RuntimeState::Running, true, "running", {}};
                     } catch (const std::exception &error) {
                         return {RuntimeState::Unknown, false, "unresponsive", error.what()};
@@ -219,19 +211,19 @@ namespace {
         }
 
         auto execute(const RuntimeCommand &command) -> Result override {
-            return session_.execute(command);
+            return agentd_client_.execute_result(command);
         }
 
         auto read(const fs::path &path, size_t limit) -> Result override {
-            return session_.read(path, limit);
+            return agentd_client_.read_result(path, limit);
         }
 
         auto write(const fs::path &path, std::string_view contents) -> Result override {
-            return session_.write(path, contents);
+            return agentd_client_.write_result(path, contents);
         }
 
         auto cancel() -> bool override {
-            return session_.cancel();
+            return agentd_client_.cancel();
         }
 
         void pause(const SandboxInfo &info) override {
@@ -301,14 +293,14 @@ namespace {
             return info.directory / "control";
         }
         void remove_control(const SandboxInfo &info) {
-            session_.disconnect();
+            agentd_client_.disconnect();
             const auto console = control_directory(info) / "console.log";
             if (fs::exists(console)) {
                 fs::rename(console, info.directory / "vm-console.log");
             }
             fs::remove_all(control_directory(info));
         }
-        json container_client_state(const SandboxInfo &info) {
+        auto container_client_state(const SandboxInfo &info) -> json {
             const auto result = container_client_->state(info.runtime_id);
             lib::check_process_result(result);
             auto state = json::parse(result.out);
@@ -317,15 +309,16 @@ namespace {
         }
         auto connect(const SandboxInfo &info,
                      std::chrono::milliseconds timeout = std::chrono::seconds(5),
-                     bool startup = false) -> std::shared_ptr<virtualization::AgentdClient> {
+                     bool startup = false) -> virtualization::AgentdClient * {
 
             ipc::Limits limits{info.options.max_file_bytes, info.options.max_file_bytes,
                                info.options.max_output_bytes,
                                uint32_t(info.options.cmd_timeout.count())};
-            return session_.connect(control_directory(info) / "agentd.sock", limits, "libkrun",
+            agentd_client_.connect(control_directory(info) / "agentd.sock", limits, "libkrun",
                                     timeout, startup);
+            return &agentd_client_;
         }
-        virtualization::Session session_;
+        virtualization::AgentdClient agentd_client_;
         std::unique_ptr<ContainerClient> container_client_;
         bool paused_ = false;
         KrunConfig config_;

@@ -1,37 +1,36 @@
-#include "lib/socket.hpp"
+#include "ipc/socket.hpp"
 #include "lib/error.hpp"
 
 #include <cerrno>
 #include <cstring>
-#include <fcntl.h>
 #include <linux/vm_sockets.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
-namespace lib {
+namespace ipc {
     namespace {
         auto address_for(const std::filesystem::path &path) -> sockaddr_un {
             const auto name = path.string();
             sockaddr_un address{};
-            require(!name.empty() && name.find('\0') == std::string::npos &&
-                        name.size() < sizeof(address.sun_path),
-                    "invalid Unix socket path");
+            lib::require(!name.empty() && name.find('\0') == std::string::npos &&
+                             name.size() < sizeof(address.sun_path),
+                         "invalid Unix socket path");
             address.sun_family = AF_UNIX;
             std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
             return address;
         }
-        auto open_socket() -> UniqueFd {
-            UniqueFd descriptor(socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+        auto open_unix_socket(int flags = 0) -> lib::UniqueFd {
+            lib::UniqueFd descriptor(socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | flags, 0));
             if (descriptor.get() < 0) {
                 throw IoError(std::string("create Unix socket: ") + std::strerror(errno));
             }
             return descriptor;
         }
     } // namespace
-    auto listen_unix(const std::filesystem::path &path, int backlog) -> UniqueFd {
+    auto listen_unix(const std::filesystem::path &path, int backlog) -> lib::UniqueFd {
         const auto address = address_for(path);
-        auto descriptor = open_socket();
+        auto descriptor = open_unix_socket();
         if (bind(descriptor.get(), reinterpret_cast<const sockaddr *>(&address), sizeof(address)) <
                 0 ||
             listen(descriptor.get(), backlog) < 0) {
@@ -39,8 +38,8 @@ namespace lib {
         }
         return descriptor;
     }
-    auto listen_vsock(uint32_t port, int backlog) -> UniqueFd {
-        UniqueFd descriptor(socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC, 0));
+    auto listen_vsock(uint32_t port, int backlog) -> lib::UniqueFd {
+        lib::UniqueFd descriptor(socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC, 0));
         if (descriptor.get() < 0) {
             throw IoError(std::string("create vsock listener: ") + std::strerror(errno));
         }
@@ -56,11 +55,11 @@ namespace lib {
         return descriptor;
     }
 
-    auto accept_socket(int listener, sockaddr *address, socklen_t *size) -> UniqueFd {
+    auto accept_socket(int listener, sockaddr *address, socklen_t *size) -> lib::UniqueFd {
         for (;;) {
             const int peer = accept4(listener, address, size, SOCK_CLOEXEC);
             if (peer >= 0) {
-                return UniqueFd(peer);
+                return lib::UniqueFd(peer);
             }
             if (errno != EINTR) {
                 throw IoError(std::string("accept socket: ") + std::strerror(errno));
@@ -68,13 +67,9 @@ namespace lib {
         }
     }
 
-    auto connect_unix(const std::filesystem::path &path, Deadline deadline) -> UniqueFd {
+    auto connect_unix(const std::filesystem::path &path, Deadline deadline) -> lib::UniqueFd {
         const auto address = address_for(path);
-        auto descriptor = open_socket();
-        const auto flags = fcntl(descriptor.get(), F_GETFL);
-        if (flags < 0 || fcntl(descriptor.get(), F_SETFL, flags | O_NONBLOCK) < 0) {
-            throw IoError("configure Unix socket failed");
-        }
+        auto descriptor = open_unix_socket(SOCK_NONBLOCK);
         if (connect(descriptor.get(), reinterpret_cast<const sockaddr *>(&address),
                     sizeof(address)) < 0) {
             if (errno != EINPROGRESS) {
@@ -92,4 +87,4 @@ namespace lib {
         }
         return descriptor;
     }
-} // namespace lib
+} // namespace ipc

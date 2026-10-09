@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace lib {
+namespace ipc {
     using Clock = std::chrono::steady_clock;
     using Deadline = Clock::time_point;
 
@@ -17,18 +17,18 @@ namespace lib {
         IoTimeout() : IoError("I/O deadline exceeded") {
         }
     };
-    enum class DescriptorKind { Socket, Stream };
 
     void wait_fd(int descriptor, short events, Deadline deadline);
-    class DescriptorStream {
+
+    // Owns a connected socket; per-call nonblocking I/O enforces the deadline.
+    class SocketStream {
       public:
-        DescriptorStream(UniqueFd descriptor, DescriptorKind kind);
+        explicit SocketStream(lib::UniqueFd descriptor);
         void write_all(std::string_view bytes, Deadline deadline);
         auto read_exact(size_t size, Deadline deadline) -> std::string;
         void interrupt() noexcept;
 
       private:
-        UniqueFd descriptor_;
-        DescriptorKind kind_;
+        lib::UniqueFd descriptor_;
     };
-} // namespace lib
+} // namespace ipc

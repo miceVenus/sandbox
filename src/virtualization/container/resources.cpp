@@ -1,6 +1,5 @@
-#include "virtualization/runtime_policy.hpp"
+#include "virtualization/container/resources.hpp"
 #include "lib/error.hpp"
-#include "lib/process.hpp"
 #include <fstream>
 #include <unistd.h>
 using json = nlohmann::json;
@@ -13,18 +12,19 @@ void check_rootless_cgroups(const Options &options) {
                              ("user-" + std::to_string(geteuid()) + ".slice") /
                              ("user@" + std::to_string(geteuid()) + ".service");
     // Standard systemd login layout: diagnose missing delegation before creating
-    // a info. Other layouts are lib::check_process_result against the actual container below.
+    // a container. Other layouts are checked against the actual container below.
     std::ifstream controllers(user_cgroup / "cgroup.controllers");
     if (controllers) {
         std::string content((std::istreambuf_iterator<char>(controllers)), {});
         lib::require(content.find("memory") != std::string::npos &&
                          content.find("pids") != std::string::npos,
-                     "systemd user info must delegate memory and pids controllers");
+                     "systemd user service must delegate memory and pids controllers");
         lib::require(options.cpu_quota_us == 0 || content.find("cpu") != std::string::npos,
-                     "CPU controller is not delegated to your systemd user info; delegate cpu or "
+                     "CPU controller is not delegated to your systemd user service; delegate cpu or "
                      "explicitly use Options::cpu_quota_us = 0 for debugging (no CPU quota)");
     }
 }
+
 void verify_runtime_resources(const SandboxInfo &info, const json &state) {
     const auto pid = state.at("pid").get<int>();
     lib::require(pid > 0, "crun did not return a container PID");

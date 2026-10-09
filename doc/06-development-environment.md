@@ -2,6 +2,8 @@
 
 容器与 microVM 共用 rootfs 准备逻辑，提供 HostTools 和 Minimal 两种环境。默认 HostTools，借用本机工具链，并为每个沙箱分配独立的可写数据目录。
 
+环境准备代码集中在 `virtualization/environment/`，通过 `environment.hpp` 声明普通函数。`make_config()` 一次生成工具挂载列表和环境变量；`prepare_rootfs()` 创建目录、安装程序及其依赖；`make_oci_config()` 在内存中构造 OCI JSON，由后端设置启动程序后写入最终文件。MicroVM 直接准备 Guest rootfs 和配置，外层容器单独构造 OCI JSON。cgroup 委派检查和资源验证位于 `virtualization/container/resources.cpp`。
+
 ## HostTools 的准备流程
 
 1. 创建轻量 rootfs 和必要挂载点，安装 SDK 的 agentd。
@@ -45,10 +47,10 @@ Python 包安装到 `/env/python`，缓存进入 `/cache/pip`，不会进入源�
 
 ## Minimal
 
-Minimal 复制静态 BusyBox 并创建 applet 链接，安装 Git、agentd 及所需动态库。程序依赖由 rootfs_program 解析并复制。它适合 shell、Git 和文件操作，不提供完整 C++/Python 开发工具链。
+Minimal 复制静态 BusyBox 并创建 applet 链接，安装 Git、agentd 及所需动态库。程序依赖由 environment 模块的 `install_program()` 解析并复制。它适合 shell、Git 和文件操作，不提供完整 C++/Python 开发工具链。
 
 Minimal 不需要一份完整发行版镜像，但需本机静态 BusyBox、Git 和依赖解析工具。HostTools 用于编译体验，Minimal 用于小工具集任务。
 
 内核与工具环境分开准备：libkrunfw 提供 Guest 内核，rootfs 提供用户态程序。运行时依赖由 `deps.lock.json` 固定源码和固件版本，`tools/build-deps.sh` 构建到 `.deps/prefix`；这不会固定 HostTools 的系统包版本。
 
-实现：[host_tools.cpp](../src/virtualization/host_tools.cpp)、[bundle.cpp](../src/virtualization/bundle.cpp)、[rootfs_program.cpp](../src/virtualization/rootfs_program.cpp)、[microvm_bootstrap.cpp](../src/agentd/microvm_bootstrap.cpp)。
+实现：[host_tools.cpp](../src/virtualization/environment/host_tools.cpp)、[rootfs.cpp](../src/virtualization/environment/rootfs.cpp)、[microvm_bootstrap.cpp](../src/agentd/microvm_bootstrap.cpp)。

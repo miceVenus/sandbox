@@ -1,5 +1,4 @@
 #include "agentd/container_bootstrap.hpp"
-#include "lib/process.hpp"
 
 #include <csignal>
 #include <fstream>
@@ -11,9 +10,9 @@
 namespace agentd {
     using namespace ipc;
     namespace {
-        void finish_container_tasks() {
+        void cleanup_container_tasks() {
             require(getpid() == 1, "container task reclamation requires PID 1");
-            const auto until = Clock::now() + std::chrono::seconds(3);
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
             for (;;) {
                 bool found = false;
                 for (const auto &entry : std::filesystem::directory_iterator("/proc")) {
@@ -35,13 +34,14 @@ namespace agentd {
                 if (!found) {
                     return;
                 }
-                require(Clock::now() < until, "container tasks were not fully reclaimed");
+                require(std::chrono::steady_clock::now() < until,
+                        "container tasks were not fully reclaimed");
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
     } // namespace
 
-    void configure_container(AgentdConfig &config, const std::filesystem::path &settings) {
+    void configure_container(ServiceConfig &config, const std::filesystem::path &settings) {
         require(getpid() == 1, "container agentd must be the PID namespace's init");
         require(prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0,
                 "cannot protect agentd from task ptrace and descriptor inspection");
@@ -54,7 +54,7 @@ namespace agentd {
         config.limits.output_bytes = spec.at("output_bytes");
         config.limits.timeout_ms = spec.at("timeout_ms");
         config.task_environment = spec.at("environment").get<std::vector<std::string>>();
-        config.finish_tasks = finish_container_tasks;
+        config.cleanup_tasks = cleanup_container_tasks;
         config.runtime_info = {
             {"isolation", "oci-crun"}, {"task_uid", geteuid()}, {"network", "disabled"}};
     }

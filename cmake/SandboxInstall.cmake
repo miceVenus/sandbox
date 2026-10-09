@@ -21,7 +21,8 @@ install(FILES include/virtualization/microvm/krun_runtime.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/virtualization/microvm)
 install(FILES include/workspace/workspace.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/workspace)
-install(FILES include/ipc/transport.hpp include/ipc/protocol.hpp
+install(FILES include/ipc/session.hpp include/ipc/protocol.hpp
+  include/ipc/io.hpp include/ipc/socket.hpp
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/ipc)
 install(DIRECTORY include/lib/
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bbm-sandbox/lib

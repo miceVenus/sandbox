@@ -124,7 +124,7 @@ auto main() -> int {
         auto git = [&](const std::vector<std::string> &arguments) {
             std::vector<std::string> command{"/usr/bin/git", "-C", source.string()};
             command.insert(command.end(), arguments.begin(), arguments.end());
-            check(lib::run_process(command, 10000).runtime_status == 0,
+            check(lib::run_process(command).runtime_status == 0,
                   "fixture Git operation failed");
         };
         git({"init", "-q"});

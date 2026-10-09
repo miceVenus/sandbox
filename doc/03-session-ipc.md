@@ -1,8 +1,8 @@
 # Session 与 IPC
 
-Session 表示一条 SDK 到 agentd 的通信通道。它持有 AgentdClient 和连接信息；工作区与运行环境的生命周期由 Sandbox 和后端管理。
+Runtime 持有 AgentdClient，AgentdClient 和 agentd Service 共用 ipc::Session；Session 直接持有 ipc::SocketStream，由 UniqueFd 管理 FD 生命周期。工作区与运行环境的生命周期由 Sandbox 和后端管理。
 
-Session 把连接持有、启动重试和身份校验集中起来，AgentdClient 专注消息操作。若两个后端各自管理这些细节，就会重复连接状态和错误处理；若并入协议 Client，后端的启动策略又会进入消息层。
+Session 接收已建立的连接，负责持有、分帧发送、接收、发送互斥、断开与失效处理，不依赖 AgentdClient，也不提供执行或文件操作接口。AgentdClient 负责握手、能力协商、运行时身份检查、请求 ID 和具体消息流程；启动重试仅发生在 Client 建连阶段。ipc::connect_unix() 和 accept_socket() 负责建立连接，Session 通过构造函数或 attach() 接收 UniqueFd。
 
 ## 通道建立
 
@@ -10,7 +10,7 @@ Session 把连接持有、启动重试和身份校验集中起来，AgentdClient
 
 microVM：libkrun 把 Guest vsock 端口 10789 映射到宿主 `control/agentd.sock`。SDK 连接 Unix socket，Guest agentd 接受 Host CID 2 的 vsock 连接。启动日志走独立 console 文件。
 
-两种后端在 SDK 侧都调用 `Session::connect()`，完成 `core.hello → core.ready` 握手并核对 isolation。启动阶段允许重试建连；已发送的操作不重放。当前一个运行环境由一个连接持有，重新接管前先释放旧句柄。
+两种后端在 SDK 侧都调用 `AgentdClient::connect()`，完成 `core.hello → core.ready` 握手并核对 isolation。启动阶段允许重试建连；已发送的操作不重放。当前一个运行环境由一个连接持有，重新接管前先释放旧句柄。
 
 ## 为什么使用 socket
 
@@ -25,7 +25,7 @@ microVM：libkrun 把 Guest vsock 端口 10789 映射到宿主 `control/agentd.s
 
 ContainerClient 的请求实际上走 memfd，返回值走管道。请求只有一次，工作进程结束即完成交互，退出码与 EOF 就能表达结束。把 agentd 套进这个模型，会失去常驻连接和重接能力；把生命周期工作进程改为常驻 socket 服务，则增加服务管理成本。
 
-Guest 选择 vsock 是因为控制通信不需要 IP 网络。virtio-serial 也能传字节，已有 Transport 适配，但需要专用端口和设备配置；当前 libkrun 提供 Unix/vsock 映射，可直接接入宿主 Session。TCP 会额外引入 Guest 网卡、地址和路由配置。
+Guest 选择 vsock 是因为控制通信不需要 IP 网络。libkrun 提供 Unix/vsock 映射，可直接接入宿主 Session。TCP 会额外引入 Guest 网卡、地址和路由配置。
 
 ## 帧与消息
 
@@ -50,10 +50,12 @@ CBOR 直接表达二进制 stdin、文件和输出，省去 JSON 的 Base64 编�
 
 同连接普通操作串行；执行中可发送取消。stdin 先收集再启动任务，当前没有交互式 stdin 或 PTY。输出按事件发送，发送期限和总量限制提供背压。
 
+agentd 的 `ServiceConfig` 由 bootstrap 填充，`agentd::serve()` 接管连接。Service 分别持有 Task 和可选 Upload：Task 保存命令、stdin、进程配置与执行线程；Upload 只记录上传种类、大小、偏移和期限，文件上传另持有 Write 事务。执行成功、启动失败或输出发送失败都进入一次任务清理，再发送最终响应；最终响应发送失败不会再次清理。WorkspaceFiles 自己管理文件访问身份和写入事务的 FD，未提交事务析构时移除临时文件。
+
 ## 失效处理
 
 有效请求的操作错误用 `core.error` 返回。畸形帧、部分帧超时或断线使通道失效。写入完成但响应丢失时结果可能已生效，自动重放会改变操作语义，因此只在建连阶段重试。
 
 封印 memfd 用于一次性请求，使内容在交付后保持固定；数据不会与任务 stdin 或诊断混合。常驻协议使用帧大小、解码复杂度、偏移和期限检查来约束持续交互。
 
-实现：[session.cpp](../src/virtualization/session.cpp)、[protocol.hpp](../include/ipc/protocol.hpp)、[protocol.cpp](../src/ipc/protocol.cpp)、[transport.cpp](../src/ipc/transport.cpp)。
+实现：[session.cpp](../src/ipc/session.cpp)、[protocol.hpp](../include/ipc/protocol.hpp)、[protocol.cpp](../src/ipc/protocol.cpp)、[io.cpp](../src/ipc/io.cpp)。

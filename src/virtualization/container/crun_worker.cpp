@@ -14,7 +14,7 @@
 namespace {
     using nlohmann::json;
 
-    json read_request() {
+    auto read_request() -> json {
         // Consume and close control before libcrun touches descriptors or starts
         // a task. Task stdin, including binary file contents, stays independent.
         struct ControlFd {

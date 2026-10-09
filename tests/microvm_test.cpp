@@ -1,4 +1,5 @@
-#include "ipc/transport.hpp"
+#include "ipc/session.hpp"
+#include "ipc/socket.hpp"
 #include "sandbox.hpp"
 #include "test_support.hpp"
 #include "virtualization/microvm/krun_runtime.hpp"
@@ -81,6 +82,13 @@ auto main(int argc, char **argv) -> int {
                   status.find("NoNewPrivs:\t1") != std::string::npos,
               "Guest task privileges wrong");
         check(exec({"/bin/pwd"}) == "/project\n", "Guest cwd wrong");
+        const auto expected_environment = options.environment == Environment::HostTools
+            ? "/env/home|/env/python/bin:/usr/bin:/bin|/build/tmp|/cache"
+            : "/project|/bin:/usr/bin||";
+        check(exec({"/bin/sh", "-c",
+                    "printf '%s|%s|%s|%s' \"$HOME\" \"$PATH\" \"$TMPDIR\" \"$XDG_CACHE_HOME\""}) ==
+                  expected_environment,
+              "Guest task environment does not match the selected environment");
         check(exec({"/bin/cat", "/sys/fs/cgroup/sandbox-tasks/pids.max"}) == "64\n",
               "Guest pids limit missing");
         exec({"/bin/sh", "-c",
@@ -121,7 +129,7 @@ auto main(int argc, char **argv) -> int {
             // remove its temporary file using the mapped file identity too.
 
             const auto until = ipc::Clock::now() + std::chrono::seconds(5);
-            ipc::Channel channel(ipc::connect_unix(info.directory / "control/agentd.sock", until));
+            ipc::Session channel(ipc::connect_unix(info.directory / "control/agentd.sock", until));
             channel.send({0,
                           ipc::Flag::Request,
                           "core.hello",

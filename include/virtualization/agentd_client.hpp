@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ipc/transport.hpp"
+#include "ipc/session.hpp"
 #include "virtualization/runtime.hpp"
 #include <mutex>
 
@@ -14,7 +14,17 @@ namespace virtualization {
     // while execute() is receiving output. Connection loss never replays an operation.
     class AgentdClient {
       public:
-        explicit AgentdClient(std::unique_ptr<ipc::Transport> transport, ipc::Limits requested = {},
+        AgentdClient() = default;
+        void connect(const std::filesystem::path &socket, ipc::Limits requested,
+                     std::string_view isolation, std::chrono::milliseconds timeout,
+                     bool startup = false);
+        void disconnect();
+        [[nodiscard]] auto is_connected() const -> bool;
+        // Runtime-facing adapters retain the SDK Result/error semantics.
+        auto execute_result(const RuntimeCommand &command) -> Result;
+        auto read_result(const std::filesystem::path &path, size_t limit) -> Result;
+        auto write_result(const std::filesystem::path &path, std::string_view content) -> Result;
+        explicit AgentdClient(lib::UniqueFd descriptor, ipc::Limits requested = {},
                               std::chrono::milliseconds io_timeout = std::chrono::seconds(5));
         void handshake();
         auto execute(const RuntimeCommand &command,
@@ -41,9 +51,13 @@ namespace virtualization {
                        ipc::Deadline deadline);
         void require_ready() const;
 
-        ipc::Channel channel_;
+        void handshake_locked();
+        void validate_configuration() const;
+        auto request_result(const std::function<Result()> &operation) -> Result;
+        ipc::Session session_;
+        std::filesystem::path socket_;
         ipc::Limits limits_;
-        std::chrono::milliseconds io_timeout_;
+        std::chrono::milliseconds io_timeout_{std::chrono::seconds(5)};
         std::mutex operations_;
         std::mutex cancellation_;
         uint32_t active_exec_ = 0;

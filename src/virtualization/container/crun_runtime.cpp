@@ -1,18 +1,17 @@
+#include "ipc/socket.hpp"
 #include "lib/error.hpp"
+#include "lib/json.hpp"
 #include "lib/process.hpp"
-#include "lib/socket.hpp"
 #include "resources.hpp"
 #include "sandbox_types.hpp"
-#include "virtualization/bundle.hpp"
+#include "virtualization/agentd_client.hpp"
+#include "virtualization/container/resources.hpp"
 #include "virtualization/container_client.hpp"
-#include "virtualization/host_tools.hpp"
+#include "virtualization/environment/environment.hpp"
 #include "virtualization/runtime.hpp"
-#include "virtualization/runtime_policy.hpp"
-#include "virtualization/session.hpp"
 
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <nlohmann/json.hpp>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -20,6 +19,7 @@
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
+namespace environment = virtualization::environment;
 
 namespace {
 
@@ -46,42 +46,42 @@ namespace {
 
         void prepare(SandboxInfo &info) override {
             lib::require(container_client_ != nullptr, "runtime state directory is not configured");
+
+            // runner == 额外编译的临时进程的地址
             const auto runner = sandbox_resources::crun_worker_path();
+
             lib::require(fs::is_regular_file(runner) && access(runner.c_str(), X_OK) == 0,
                          "SDK runtime runner missing or not executable: " + runner.string());
-            if (info.options.environment == Environment::HostTools)
-                validate_host_tools(info.options.src_repo, state_directory_.parent_path());
+
+            const auto environment_config = environment::make_config(info.options);
+            environment::validate_host_tools(environment_config, info.options.src_repo,
+                                              state_directory_.parent_path());
+
             info.rootless = geteuid() != 0;
-            prepare_bundle(info);
+
+            environment::prepare_rootfs(info, environment_config);
+
             fs::create_directory(control_directory(info));
             fs::permissions(control_directory(info), fs::perms::owner_all);
 
-            std::ifstream input(info.bundle_dir / "config.json");
-            auto spec = json::parse(input);
-            const auto environment = spec.at("process").at("env");
+            auto spec = environment::make_oci_config(info, environment_config);
             spec["process"]["args"] = {"/sandbox-tools/agentd", "--serve",
                                        "--workspace",           info.options.ctr_repo.string(),
                                        "--listen-fd",           "3",
                                        "--container-config",    "/sandbox-tools/container.json"};
-            std::ofstream config(info.bundle_dir / "config.json");
-            config << spec.dump(2);
-            config.close();
-            lib::require(bool(config), "cannot save agentd OCI configuration");
-            std::ofstream settings(info.bundle_dir / "rootfs/sandbox-tools/container.json");
-            settings << json{{"workspace", info.options.ctr_repo.string()},
+            lib::write_json(info.bundle_dir / "config.json", spec);
+            lib::write_json(info.bundle_dir / "rootfs/sandbox-tools/container.json",
+                            {{"workspace", info.options.ctr_repo.string()},
                              {"file_bytes", info.options.max_file_bytes},
                              {"output_bytes", info.options.max_output_bytes},
                              {"timeout_ms", info.options.cmd_timeout.count()},
-                             {"environment", environment}}
-                            .dump(2);
-            settings.close();
-            lib::require(bool(settings), "cannot save container agentd configuration");
+                             {"environment", environment_config.variables}});
         }
 
         void start(SandboxInfo &info) override {
             // This listener's pathname remains outside the container mount namespace.
             // Only PID 1 receives the open listener; task children close all extra FDs.
-            auto listener = lib::listen_unix(control_directory(info) / "agentd.sock");
+            auto listener = ipc::listen_unix(control_directory(info) / "agentd.sock");
             lib::check_process_result(container_client_->start(
                 info.runtime_id, info.bundle_dir.string(), listener.get()));
             const auto result = container_client_->state(info.runtime_id);
@@ -96,9 +96,9 @@ namespace {
 
         auto status(const SandboxInfo &info) -> RuntimeStatus override {
             if (!paused_) {
-                if (session_.is_connected()) {
+                if (agentd_client_.is_connected()) {
                     try {
-                        session_.ping();
+                        agentd_client_.ping();
                         return {RuntimeState::Running, true, "running", {}};
                     } catch (const std::exception &error) {
                         return {RuntimeState::Unknown, false, "unresponsive", error.what()};
@@ -132,19 +132,19 @@ namespace {
         }
 
         auto execute(const RuntimeCommand &command) -> Result override {
-            return session_.execute(command);
+            return agentd_client_.execute_result(command);
         }
 
         auto read(const fs::path &path, size_t limit) -> Result override {
-            return session_.read(path, limit);
+            return agentd_client_.read_result(path, limit);
         }
 
         auto write(const fs::path &path, std::string_view contents) -> Result override {
-            return session_.write(path, contents);
+            return agentd_client_.write_result(path, contents);
         }
 
         auto cancel() -> bool override {
-            return session_.cancel();
+            return agentd_client_.cancel();
         }
 
         void pause(const SandboxInfo &info) override {
@@ -165,13 +165,13 @@ namespace {
             const auto result = container_client_->state(info.runtime_id);
             if (result.runtime_status != 0 && !result.timed_out && !result.output_limited &&
                 !fs::exists(state_directory_ / info.runtime_id)) {
-                session_.disconnect();
+                agentd_client_.disconnect();
                 fs::remove_all(control_directory(info));
                 return;
             }
             lib::require(container_client_->destroy(info.runtime_id),
                          "runtime cleanup failed; sandbox retained");
-            session_.disconnect();
+            agentd_client_.disconnect();
             fs::remove_all(control_directory(info));
         }
 
@@ -181,18 +181,19 @@ namespace {
         }
 
         auto connect(const SandboxInfo &info, bool startup = false)
-            -> std::shared_ptr<virtualization::AgentdClient> {
+            -> virtualization::AgentdClient * {
 
             ipc::Limits limits{info.options.max_file_bytes, info.options.max_file_bytes,
                                info.options.max_output_bytes,
                                uint32_t(info.options.cmd_timeout.count())};
-            return session_.connect(control_directory(info) / "agentd.sock", limits, "oci-crun",
+            agentd_client_.connect(control_directory(info) / "agentd.sock", limits, "oci-crun",
                                     std::chrono::seconds(5), startup);
+            return &agentd_client_;
         }
 
         fs::path state_directory_;
         std::unique_ptr<ContainerClient> container_client_;
-        virtualization::Session session_;
+        virtualization::AgentdClient agentd_client_;
         bool paused_ = false;
     };
 } // namespace

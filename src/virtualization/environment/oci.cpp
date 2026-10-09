@@ -1,0 +1,118 @@
+#include "virtualization/environment/environment.hpp"
+#include "lib/filesystem.hpp"
+#include "sandbox_types.hpp"
+
+#include <nlohmann/json.hpp>
+#include <unistd.h>
+
+using json = nlohmann::json;
+
+namespace virtualization::environment {
+    auto make_oci_config(const SandboxInfo &info, const Config &environment) -> json {
+        const auto &options = info.options;
+        const bool rootless = info.rootless;
+
+        json mounts = json::array();
+        auto mount = [&](std::string destination, std::string type, std::string source,
+                         json flags) {
+            mounts.push_back({{"destination", destination},
+                              {"type", type},
+                              {"source", source},
+                              {"options", flags}});
+        };
+
+        if (options.environment == Environment::HostTools) {
+            for (const auto &tools : environment.tool_mounts) {
+                // Nonrecursive bind excludes nested host mounts. Never use rbind.
+                mount(tools.destination.string(), "bind", tools.source.string(),
+                      {"bind", "ro", "nosuid", "nodev", "private"});
+            }
+            for (const auto *directory : runtime_directories) {
+                mount(std::string("/") + directory, "bind",
+                      (info.directory / "runtime-data" / directory).string(),
+                      {"bind", "rw", "nosuid", "nodev", "private"});
+            }
+        }
+
+        mount("/proc", "proc", "proc", {"nosuid", "nodev", "noexec"});
+        mount("/dev", "tmpfs", "tmpfs", {"nosuid", "strictatime", "mode=755", "size=65536k"});
+        mount("/dev/pts", "devpts", "devpts",
+              {"nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620",
+               rootless ? "gid=0" : "gid=5"});
+        mount("/dev/shm", "tmpfs", "shm", {"nosuid", "nodev", "noexec", "mode=1777", "size=16m"});
+        mount("/tmp", "tmpfs", "tmpfs", {"nosuid", "nodev", "noexec", "mode=1777", "size=16m"});
+        mount(options.ctr_repo.string(), "bind", info.work_files_dir.string(),
+              {"bind", "rw", "nosuid", "nodev", "private"});
+
+        json namespaces = json::array();
+
+        for (const auto &type : {"pid", "network", "ipc", "uts", "cgroup", "mount"}) {
+            namespaces.push_back({{"type", type}});
+        }
+
+        json devices = json::array({{{"allow", false}, {"access", "rwm"}}});
+
+        for (int minor : {3, 5, 7, 8, 9}) {
+            devices.push_back(
+                {{"allow", true}, {"type", "c"}, {"major", 1}, {"minor", minor}, {"access", "rw"}});
+        }
+
+        devices.push_back(
+            {{"allow", true}, {"type", "c"}, {"major", 5}, {"minor", 0}, {"access", "rw"}});
+
+        json config = {
+            {"ociVersion", "1.0.0"},
+            {"hostname", "agentd-sandbox"},
+            {"root", {{"path", "rootfs"}, {"readonly", true}}},
+            {"mounts", mounts},
+            {"process",
+             {{"terminal", false},
+              {"user", {{"uid", 65534}, {"gid", 65534}, {"additionalGids", json::array()}}},
+              {"cwd", lib::resolve_relative_path(options.ctr_repo, options.cwd_rlt).string()},
+              {"env", environment.variables},
+              {"noNewPrivileges", true},
+              {"capabilities",
+               {{"bounding", json::array()},
+                {"effective", json::array()},
+                {"permitted", json::array()},
+                {"inheritable", json::array()},
+                {"ambient", json::array()}}},
+              {"rlimits", json::array({{{"type", "RLIMIT_NOFILE"}, {"soft", 256}, {"hard", 256}},
+                                       {{"type", "RLIMIT_CORE"}, {"soft", 0}, {"hard", 0}}})}}},
+            {"linux",
+             {{"namespaces", namespaces},
+              {"cgroupsPath", "/bbm-sandbox-" + info.id},
+              {"resources",
+               {{"devices", devices},
+                {"memory", {{"limit", options.memory_bytes}, {"swap", options.memory_bytes}}},
+                {"cpu", {{"period", options.cpu_period_us}, {"quota", options.cpu_quota_us}}},
+                {"pids", {{"limit", options.max_tasks}}}}},
+              {"maskedPaths",
+               {"/proc/kcore", "/proc/keys", "/proc/timer_list", "/proc/latency_stats",
+                "/proc/sched_debug", "/sys/firmware"}},
+              {"readonlyPaths",
+               {"/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"}}}}};
+
+        if (rootless) {
+            // Single-ID mapping keeps workspace ownership with the invoking user;
+            // container UID 0 has no host-root identity or Linux capabilities.
+            config["process"]["user"]["uid"] = 0;
+            config["process"]["user"]["gid"] = 0;
+            config["linux"]["namespaces"].push_back({{"type", "user"}});
+            config["linux"]["uidMappings"] =
+                json::array({{{"containerID", 0}, {"hostID", geteuid()}, {"size", 1}}});
+            config["linux"]["gidMappings"] =
+                json::array({{{"containerID", 0}, {"hostID", getegid()}, {"size", 1}}});
+            config["linux"]["cgroupsPath"] = "user.slice:bbm-sandbox:" + info.id;
+            // An unprivileged runtime cannot install a device eBPF filter. Only
+            // standard /dev entries are provided; writable workspace is nodev and
+            // the task has no CAP_MKNOD. There is no host /dev bind mount.
+            config["linux"]["resources"].erase("devices");
+        }
+
+        if (options.cpu_quota_us == 0) {
+            config["linux"]["resources"].erase("cpu");
+        }
+        return config;
+    }
+} // namespace virtualization::environment

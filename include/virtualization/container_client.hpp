@@ -26,9 +26,7 @@ class ContainerClient {
     auto destroy(const std::string &id) -> bool;
 
   private:
-    auto call(const crun_worker::Request &request, int timeout_ms = 10000,
-              bool drain_until_eof = true, size_t output_limit = 1024 * 1024, int listener_fd = -1)
-        -> Result;
+    auto call(const crun_worker::Request &request, int listener_fd = -1) -> Result;
     std::filesystem::path root_;
     bool systemd_cgroups_;
 };

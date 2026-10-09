@@ -52,7 +52,7 @@ int main() {
             arguments.insert(arguments.begin(),
                              {"/usr/bin/git", "-C", source.string(), "-c",
                               "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"});
-            require_success(lib::run_process(arguments, 10000), "准备临时 Git 仓库");
+            require_success(lib::run_process(arguments), "准备临时 Git 仓库");
         };
         git({"init", "-q"});
         git({"add", "main.cpp"});

@@ -68,8 +68,7 @@ with zipfile.ZipFile(sys.argv[1], 'w') as wheel:
                    'Root-Is-Purelib: true\nTag: py3-none-any\n')
     wheel.writestr('sandbox_probe-1.0.dist-info/RECORD', '')
 )PY",
-                              (source / "sandbox_probe-1.0-py3-none-any.whl").string()},
-                             10000);
+                              (source / "sandbox_probe-1.0-py3-none-any.whl").string()});
         check(wheel.runtime_status == 0, "cannot create offline pip fixture: " + wheel.err);
         test::commit(source, "base");
     }

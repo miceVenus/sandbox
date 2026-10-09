@@ -11,7 +11,9 @@ endfunction()
 foreach(name IN ITEMS process workspace sandbox backend container agentd_protocol agentd_service session)
   sandbox_add_test_program(${name})
 endforeach()
-target_sources(session-test PRIVATE src/agentd/service.cpp)
+target_sources(session-test PRIVATE
+  src/agentd/service.cpp
+  src/agentd/workspace_files.cpp)
 add_test(NAME agentd-session COMMAND session-test)
 set_tests_properties(agentd-session PROPERTIES TIMEOUT 20)
 
